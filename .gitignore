@@ -1,0 +1,18 @@
+# Downloaded radar files — large, don't commit
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Plots & models output
+data/plots/
+data/models/
+
+# OS
+.DS_Store
+Thumbs.db

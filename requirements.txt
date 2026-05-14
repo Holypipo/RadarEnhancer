@@ -1,0 +1,12 @@
+arm-pyart
+matplotlib
+numpy
+scipy
+netCDF4
+h5py
+Pillow
+streamlit
+folium
+streamlit-folium
+tqdm
+requests
