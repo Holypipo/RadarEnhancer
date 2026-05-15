@@ -1,260 +1,195 @@
 """
 02_visualize.py
 ---------------
-Read the downloaded NEXRAD file and produce publication-quality plots of:
-    • Reflectivity (dBZ)
-    • Radial velocity (m/s)
-    • Spectrum width
+Visualise an AEMET radar GIF as a publication-quality reflectivity plot.
 
-All plots are saved as PNGs in  data/plots/.
+Produces (all saved to data/plots/):
+    • aemet_ppi.png          — circular radar disc (true PPI appearance)
+    • aemet_raw_array.png    — flat 2-D array view (rays × gates / H × W)
 
 Usage:
-    python 02_visualize.py
+    python 02_visualize.py -f aemet_nacional_20260515_1115.gif
 """
+
+from __future__ import annotations
 
 import os
 import sys
+import argparse
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")                      # non-interactive — always saves to file
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-try:
-    import pyart
-    HAS_PYART = True
-except ImportError:
-    HAS_PYART = False
-
-# Add project root to path so utils can be imported
-sys.path.insert(0, os.path.dirname(__file__))
+# ── Project imports ───────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.radar_io import read_radar, get_field_array
 from utils.enhancement import generate_synthetic_radar_field
 
+# ── CLI ───────────────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Visualise AEMET radar data")
+parser.add_argument(
+    "-f", type=str, default=None,
+    help="GIF filename inside data/  (e.g. aemet_nacional_20260515_1115.gif)"
+)
+args = parser.parse_args()
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
-
-DATA_DIR  = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLOTS_DIR = os.path.join(DATA_DIR, "plots")
-FILE_NAME = "KTLX20130520_195527_V06"
-FILE_PATH = os.path.join(DATA_DIR, FILE_NAME)
-
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
-
-# ── Colour maps ───────────────────────────────────────────────────────────────
-
-# NWS-style reflectivity colourmap (approximation)
-NWS_REF_COLORS = [
+# ── Colour map (NWS-style reflectivity) ──────────────────────────────────────
+_REF_COLORS = [
     "#646464", "#04e9e7", "#019ff4", "#0300f4",
     "#02fd02", "#01c501", "#008e00", "#fdf802",
     "#e5bc00", "#fd9500", "#fd0000", "#d40000",
     "#bc0000", "#f800fd", "#9854c6",
 ]
-NWS_REF_BOUNDS = [-32, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 75]
-nws_ref_cmap = mcolors.LinearSegmentedColormap.from_list(
-    "nws_ref", list(zip(np.linspace(0, 1, len(NWS_REF_COLORS)), NWS_REF_COLORS))
+_REF_NODES  = np.linspace(0, 1, len(_REF_COLORS))
+NWS_REF_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "nws_ref", list(zip(_REF_NODES, _REF_COLORS))
 )
+VMIN, VMAX = -10.0, 75.0
 
 
-# ── Plotting helpers ──────────────────────────────────────────────────────────
+# ── Plotting ──────────────────────────────────────────────────────────────────
 
-def plot_ppi(
-    radar: pyart.core.Radar,
-    field: str,
-    sweep: int = 0,
-    title: str | None = None,
-    vmin: float = -32,
-    vmax: float = 75,
-    cmap: str = "pyart_NWSRef",
-    save_path: str | None = None,
-) -> None:
-    """
-    Plot a Plan Position Indicator (PPI) scan — the classic circular radar image.
-
-    Parameters
-    ----------
-    radar     : Py-ART Radar object
-    field     : field name to plot
-    sweep     : sweep (elevation) index
-    title     : plot title (auto-generated if None)
-    vmin/vmax : colour scale range
-    cmap      : matplotlib or PyART colourmap name
-    save_path : if given, save PNG here; otherwise show interactively
-    """
-    fig, ax = plt.subplots(figsize=(9, 8), facecolor="#0d0d0d")
+def _dark_fig(figsize=(9, 8)):
+    fig, ax = plt.subplots(figsize=figsize, facecolor="#0d0d0d")
     ax.set_facecolor("#0d0d0d")
+    return fig, ax
 
-    if HAS_PYART:
-        display = pyart.graph.RadarDisplay(radar)
-        display.plot(
-            field,
-            sweep=sweep,
-            ax=ax,
-            title="",
-            colorbar_label="",
-            vmin=vmin,
-            vmax=vmax,
-            cmap=cmap,
-        )
-    else:
-        # Fallback: plot the raw array as an approximate PPI if we can't use RadarDisplay
-        # Note: This won't be a true circular PPI without coordinate transforms,
-        # but it lets us see the data.
-        data = get_field_array(radar, field, sweep=sweep)
-        im = ax.imshow(data, aspect='auto', vmin=vmin, vmax=vmax, cmap='viridis')
-        plt.colorbar(im, ax=ax)
-        print(f"  [NOTE] Standard imshow used for {field} (pyart missing)")
 
-    elev = 0.5 # Default fallback
-    if hasattr(radar, "fixed_angle"):
-        elev = radar.fixed_angle["data"][sweep]
-    elif hasattr(radar, "sweeps") and len(radar.sweeps) > sweep:
-        # MetPy sweep header has target_elevation
-        try: elev = radar.sweeps[sweep][0].header.target_elevation
-        except: pass
-
-    auto_title = title or f"{field.replace('_', ' ').title()}  |  Elevation {elev:.1f}°"
-    ax.set_title(auto_title, color="white", fontsize=13, pad=10)
+def _style_ax(ax):
     ax.tick_params(colors="white")
     ax.xaxis.label.set_color("white")
     ax.yaxis.label.set_color("white")
     for spine in ax.spines.values():
         spine.set_edgecolor("#333333")
 
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Saved: {os.path.abspath(save_path)}")
-        plt.close(fig)
-    else:
-        plt.show()
 
-
-def plot_raw_array(
-    data: np.ndarray,
-    title: str = "Raw 2-D Field",
-    vmin: float = -32,
-    vmax: float = 75,
-    cmap: str = "pyart_NWSRef",
-    save_path: str | None = None,
-) -> None:
-    """
-    Plot a raw 2-D NumPy array (rays × gates) as a rectangular image.
-    Useful for seeing the raw data grid before polar coordinate transformations.
-    """
-    fig, ax = plt.subplots(figsize=(12, 5), facecolor="#0d0d0d")
-    ax.set_facecolor("#0d0d0d")
-
-    # Try to get the colormap from pyart, otherwise viridis
-    cmap_obj = "viridis"
-    if HAS_PYART:
-        try:
-            cmap_obj = pyart.graph.cm.get_cmap(cmap)
-        except Exception:
-            pass
-
-    im = ax.imshow(
-        data, aspect="auto", origin="upper",
-        vmin=vmin, vmax=vmax, cmap=cmap_obj, interpolation="nearest"
-    )
-    cbar = plt.colorbar(im, ax=ax, pad=0.01, fraction=0.02)
+def _colorbar(fig, im, ax, label="Reflectivity (dBZ)"):
+    """Attach a colourbar to the right of ax."""
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.92)
+    cbar.set_label(label, color="white", fontsize=9)
     cbar.ax.yaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white")
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
+    return cbar
 
+
+def _save(fig, path: str):
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    print(f"  Saved → {path}")
+    plt.close(fig)
+
+
+def plot_ppi(data: np.ndarray, title: str, save_path: str):
+    """
+    Draw the data as a circular PPI disc — masks everything outside the
+    radar circle so it looks like a real radar product.
+    """
+    H, W = data.shape
+    cy, cx = H / 2, W / 2
+    radius = min(cy, cx) * 0.90
+
+    # Build a masked array: NaN outside the disc
+    y, x    = np.ogrid[:H, :W]
+    outside = (y - cy) ** 2 + (x - cx) ** 2 > radius ** 2
+    display = data.copy()
+    display[outside] = np.nan
+
+    fig, ax = _dark_fig(figsize=(9, 9))
+    im = ax.imshow(
+        display,
+        origin="upper",
+        vmin=VMIN, vmax=VMAX,
+        cmap=NWS_REF_CMAP,
+        interpolation="bilinear",
+    )
+    ax.set_title(title, color="white", fontsize=13, pad=10)
+    ax.axis("off")                     # clean — no pixel coordinates shown
+    _colorbar(fig, im, ax)
+    _save(fig, save_path)
+
+
+def plot_raw_array(data: np.ndarray, title: str, save_path: str):
+    """Rectangular 2-D view of the raw dBZ array."""
+    fig, ax = _dark_fig(figsize=(12, 5))
+    im = ax.imshow(
+        data,
+        aspect="auto", origin="upper",
+        vmin=VMIN, vmax=VMAX,
+        cmap=NWS_REF_CMAP,
+        interpolation="nearest",
+    )
     ax.set_title(title, color="white", fontsize=12)
-    ax.set_xlabel("Gate (range bin)", color="white")
-    ax.set_ylabel("Ray (azimuth)", color="white")
-    ax.tick_params(colors="white")
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Saved: {os.path.abspath(save_path)}")
-        plt.close(fig)
-    else:
-        plt.show()
+    ax.set_xlabel("Column (x / gate)", color="white")
+    ax.set_ylabel("Row (y / ray)", color="white")
+    _style_ax(ax)
+    _colorbar(fig, im, ax)
+    _save(fig, save_path)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    radar = None
-    raw_np = None
+    data = None
+    label = "Synthetic"
 
-    # 1. Try to load real data
-    if os.path.exists(FILE_PATH):
+    # 1. Try to load the requested file
+    if args.f:
+        filepath = os.path.join(DATA_DIR, args.f)
         try:
-            radar = read_radar(FILE_PATH)
-            print(f"\n[OK] Loaded real radar data from {os.path.basename(FILE_PATH)}")
+            radar = read_radar(filepath)
+            data  = get_field_array(radar, "reflectivity")
+            label = os.path.splitext(args.f)[0]
+            print(f"[OK] Loaded: {args.f}  shape={data.shape}")
         except Exception as e:
-            print(f"\n[!] Failed to read real radar file: {e}")
-            print("    Falling back to synthetic data for visualization.")
+            print(f"[!] Could not load '{args.f}': {e}")
+            print("    Falling back to synthetic data.")
     else:
-        print(f"\n[!] Radar file not found at {FILE_PATH}")
-        print("    Falling back to synthetic data for visualization.")
-
-    # 2. Generate synthetic fallback if real load failed
-    if radar is None:
-        raw_np = generate_synthetic_radar_field()
-        print("[OK] Synthetic radar field generated.")
-        
-        # Plot the synthetic array
-        plot_raw_array(
-            raw_np,
-            title="Synthetic Reflectivity — Demonstration Field",
-            vmin=-32, vmax=75,
-            save_path=os.path.join(PLOTS_DIR, "synthetic_reflectivity_array.png"),
+        # Auto-discover newest AEMET gif in data/
+        gifs = sorted(
+            [f for f in os.listdir(DATA_DIR) if f.startswith("aemet_") and f.endswith(".gif")],
+            reverse=True,
         )
-        print(f"\n[OK] All demonstration plots saved to: {PLOTS_DIR}")
-        return
+        if gifs:
+            filepath = os.path.join(DATA_DIR, gifs[0])
+            try:
+                radar = read_radar(filepath)
+                data  = get_field_array(radar, "reflectivity")
+                label = os.path.splitext(gifs[0])[0]
+                print(f"[OK] Auto-loaded newest file: {gifs[0]}  shape={data.shape}")
+            except Exception as e:
+                print(f"[!] Auto-load failed: {e}")
 
-    # 3. Proceed with real radar plots if loaded
-    print("Generating plots…")
+    # 2. Synthetic fallback
+    if data is None:
+        print("[OK] Using synthetic radar field.")
+        data  = generate_synthetic_radar_field(h=760, w=760)
+        label = "Synthetic"
 
-    # Reflectivity
-    try:
-        plot_ppi(
-            radar, "reflectivity", sweep=0,
-            vmin=-32, vmax=75, cmap="pyart_NWSRef",
-            save_path=os.path.join(PLOTS_DIR, "ppi_reflectivity.png"),
-        )
-    except Exception as e:
-        print(f"  Error plotting reflectivity: {e}")
+    print(f"Value range: {np.nanmin(data):.1f} … {np.nanmax(data):.1f} dBZ")
+    print(f"Signal pixels (>0 dBZ): {np.sum(data > 0):,}")
 
-    # Velocity
-    try:
-        plot_ppi(
-            radar, "velocity", sweep=0,
-            vmin=-32, vmax=32, cmap="pyart_NWSVel",
-            save_path=os.path.join(PLOTS_DIR, "ppi_velocity.png"),
-        )
-    except Exception as e:
-        print(f"  Error plotting velocity: {e}")
+    # 3. Produce plots
+    print("\nGenerating plots…")
 
-    # Spectrum width
-    try:
-        plot_ppi(
-            radar, "spectrum_width", sweep=0,
-            vmin=0, vmax=10, cmap="pyart_NWS_SPW",
-            save_path=os.path.join(PLOTS_DIR, "ppi_spectrum_width.png"),
-        )
-    except Exception as e:
-        # Only log if it's not a 'field not found' error
-        if "not found" not in str(e).lower():
-            print(f"  Error plotting spectrum width: {e}")
+    plot_ppi(
+        data,
+        title=f"AEMET Reflectivity — {label}",
+        save_path=os.path.join(PLOTS_DIR, "aemet_ppi.png"),
+    )
 
-    # ── Raw 2-D array view ─────────────────────────────────────────────────
-    print("\nGenerating raw 2-D array view…")
-    try:
-        raw_np = get_field_array(radar, "reflectivity", sweep=0)
-        plot_raw_array(
-            raw_np,
-            title=f"Raw Reflectivity — Sweep 0 (rays × gates)  shape={raw_np.shape}",
-            vmin=-32, vmax=75,
-            save_path=os.path.join(PLOTS_DIR, "raw_reflectivity_array.png"),
-        )
-    except Exception as e:
-        print(f"  Error generating raw array view: {e}")
+    plot_raw_array(
+        data,
+        title=f"Raw dBZ Array — {label}  (shape {data.shape[0]}×{data.shape[1]})",
+        save_path=os.path.join(PLOTS_DIR, "aemet_raw_array.png"),
+    )
 
-    print(f"\n[OK] All plots saved to: {PLOTS_DIR}")
+    print(f"\n[OK] Plots saved to: {PLOTS_DIR}")
     print("Next step: python 03_enhance.py")
 
 

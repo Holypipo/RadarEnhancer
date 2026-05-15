@@ -1,224 +1,225 @@
 """
 03_enhance.py
 -------------
-Applies the full enhancement pipeline to the downloaded NEXRAD reflectivity
-field and produces a side-by-side before/after comparison plot.
+Apply the full enhancement pipeline to an AEMET radar reflectivity field
+and save comparison plots to data/plots/.
 
 Pipeline:
-    Raw data  →  Denoise (Gaussian)  →  Upscale (2×)  →  Sharpen (unsharp mask)
+    Raw  →  Denoise  →  Upscale 2×  →  Sharpen  →  Enhanced
+
+Outputs (all in data/plots/):
+    enhance_pipeline_steps.png   — 4-panel step-by-step view
+    enhance_before_after.png     — side-by-side comparison
+    enhance_difference_map.png   — what the algorithm added over naive upscale
 
 Usage:
-    python 03_enhance.py
+    python 03_enhance.py -f aemet_nacional_20260515_1115.gif
 """
+
+from __future__ import annotations
 
 import os
 import sys
+import argparse
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")                  # always write to file, never open a window
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+import matplotlib.colors as mcolors
 
-try:
-    import pyart
-    HAS_PYART = True
-except ImportError:
-    HAS_PYART = False
-
-# Add project root to path so utils can be imported
-sys.path.insert(0, os.path.dirname(__file__))
+# ── Project imports ───────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.radar_io import read_radar, get_field_array
-from utils.enhancement import denoise_gaussian, upscale, sharpen_unsharp_mask, enhance_field, compute_snr, generate_synthetic_radar_field
+from utils.enhancement import (
+    denoise_gaussian, denoise_advanced,
+    upscale, sharpen_unsharp_mask,
+    compute_snr, generate_synthetic_radar_field,
+)
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Enhance AEMET radar data")
+parser.add_argument(
+    "-f", type=str, default=None,
+    help="GIF filename inside data/  (e.g. aemet_nacional_20260515_1115.gif)"
+)
+args = parser.parse_args()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-
-DATA_DIR  = os.path.join(os.path.dirname(__file__), "data")
+SCALE     = 2
+DATA_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLOTS_DIR = os.path.join(DATA_DIR, "plots")
-FILE_PATH = os.path.join(DATA_DIR, "KTLX20130520_195527_V06")
-FIELD     = "reflectivity"
-SWEEP     = 0          # lowest elevation tilt
-SCALE     = 2          # upscaling factor (2 = double resolution)
-
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
+VMIN, VMAX = -10.0, 75.0
 
-# ── Plotting helpers ──────────────────────────────────────────────────────────
+# NWS-style colourmap
+_REF_COLORS = [
+    "#646464", "#04e9e7", "#019ff4", "#0300f4",
+    "#02fd02", "#01c501", "#008e00", "#fdf802",
+    "#e5bc00", "#fd9500", "#fd0000", "#d40000",
+    "#bc0000", "#f800fd", "#9854c6",
+]
+NWS_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "nws_ref", list(zip(np.linspace(0, 1, len(_REF_COLORS)), _REF_COLORS))
+)
 
-def _imshow(ax, data, title, vmin=-32, vmax=75, cmap="pyart_NWSRef"):
-    """Shared imshow call for all panels."""
-    cmap_obj = "viridis"
-    if HAS_PYART:
-        try:
-            cmap_obj = pyart.graph.cm.get_cmap(cmap)
-        except Exception:
-            pass
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _dark_fig_axes(n_panels: int, figsize: tuple):
+    fig = plt.figure(figsize=figsize, facecolor="#0d0d0d")
+    axes = []
+    for i in range(n_panels):
+        ax = fig.add_subplot(1, n_panels, i + 1)
+        ax.set_facecolor("#0d0d0d")
+        axes.append(ax)
+    return fig, axes
+
+
+def _imshow(ax, data, title, vmin=VMIN, vmax=VMAX):
     im = ax.imshow(
         data, aspect="auto", origin="upper",
-        vmin=vmin, vmax=vmax, cmap=cmap_obj, interpolation="nearest",
+        vmin=vmin, vmax=vmax, cmap=NWS_CMAP, interpolation="nearest",
     )
     ax.set_title(title, color="white", fontsize=10, pad=6)
     ax.tick_params(colors="white", labelsize=7)
-    ax.set_xlabel("Gate (range)", color="white", fontsize=8)
-    ax.set_ylabel("Ray (azimuth)", color="white", fontsize=8)
+    ax.set_xlabel("Column", color="white", fontsize=8)
+    ax.set_ylabel("Row", color="white", fontsize=8)
     return im
 
 
-def plot_pipeline_steps(raw, denoised, upscaled, enhanced, save_path=None):
-    """
-    4-panel figure showing each step of the enhancement pipeline.
-    """
-    fig = plt.figure(figsize=(18, 8), facecolor="#0d0d0d")
-    gs  = gridspec.GridSpec(1, 4, figure=fig, wspace=0.04)
+def _shared_colorbar(fig, im, axes):
+    """Add a single colourbar to the right of the last axis."""
+    cbar = fig.colorbar(im, ax=axes[-1], fraction=0.046, pad=0.04, shrink=0.92)
+    cbar.set_label("Reflectivity (dBZ)", color="white", fontsize=9)
+    cbar.ax.yaxis.set_tick_params(color="white")
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
 
+
+def _save(fig, path: str):
+    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    size_kb = os.path.getsize(path) // 1024
+    print(f"  Saved → {path}  ({size_kb} KB)")
+
+
+# ── Plot functions ────────────────────────────────────────────────────────────
+
+def plot_pipeline_steps(raw, denoised, upscaled, enhanced, save_path: str):
+    """4-panel figure: raw → denoised → upscaled → sharpened."""
     panels = [
         (raw,      f"① Raw\n{raw.shape[0]}×{raw.shape[1]}"),
-        (denoised, f"② Denoised (σ=1.0)\n{denoised.shape[0]}×{denoised.shape[1]}"),
+        (denoised, f"② Denoised\n{denoised.shape[0]}×{denoised.shape[1]}"),
         (upscaled, f"③ Upscaled {SCALE}×\n{upscaled.shape[0]}×{upscaled.shape[1]}"),
         (enhanced, f"④ Sharpened\n{enhanced.shape[0]}×{enhanced.shape[1]}"),
     ]
-
-    ims = []
-    for i, (data, title) in enumerate(panels):
-        ax = fig.add_subplot(gs[i])
-        ax.set_facecolor("#0d0d0d")
+    fig, axes = _dark_fig_axes(4, figsize=(18, 5))
+    im = None
+    for ax, (data, title) in zip(axes, panels):
         im = _imshow(ax, data, title)
-        ims.append(im)
-        if i > 0:
-            ax.set_ylabel("")  # clean up duplicate labels
-
-    # Shared colourbar on the right
-    cbar_ax = fig.add_axes([0.92, 0.12, 0.012, 0.76])
-    cbar = fig.colorbar(ims[-1], cax=cbar_ax)
-    cbar.set_label("Reflectivity (dBZ)", color="white", fontsize=9)
-    cbar.ax.yaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
-
+    if im is not None:
+        _shared_colorbar(fig, im, axes)
     fig.suptitle(
-        "XRAD Enhancement Pipeline — KTLX 2013-05-20  |  Sweep 0 (0.5°)",
-        color="white", fontsize=13, y=0.98,
+        "AEMET Radar Enhancement Pipeline",
+        color="white", fontsize=13, y=1.01,
     )
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Saved: {os.path.abspath(save_path)}")
-        plt.close(fig)
-    else:
-        plt.show()
+    fig.tight_layout()
+    _save(fig, save_path)
 
 
-def plot_before_after(raw, enhanced, save_path=None):
-    """
-    Simple 2-panel before / after comparison (good for reports).
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor="#0d0d0d")
-    fig.subplots_adjust(wspace=0.05)
-
-    for ax in axes:
-        ax.set_facecolor("#0d0d0d")
-
-    _imshow(axes[0], raw,      f"Before  —  raw {raw.shape[0]}×{raw.shape[1]}")
-    im = _imshow(axes[1], enhanced, f"After   —  enhanced {enhanced.shape[0]}×{enhanced.shape[1]}")
-
-    cbar_ax = fig.add_axes([0.92, 0.12, 0.012, 0.76])
-    cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label("Reflectivity (dBZ)", color="white", fontsize=9)
-    cbar.ax.yaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
-
-    fig.suptitle(
-        "Before / After — XRAD Signal Enhancement",
-        color="white", fontsize=13, y=0.98,
-    )
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Saved: {os.path.abspath(save_path)}")
-        plt.close(fig)
-    else:
-        plt.show()
+def plot_before_after(raw, enhanced, save_path: str):
+    """2-panel before / after comparison."""
+    fig, axes = _dark_fig_axes(2, figsize=(14, 6))
+    _imshow(axes[0], raw,      f"Before — raw {raw.shape[0]}×{raw.shape[1]}")
+    im = _imshow(axes[1], enhanced, f"After — enhanced {enhanced.shape[0]}×{enhanced.shape[1]}")
+    _shared_colorbar(fig, im, axes)
+    fig.suptitle("Before / After — AEMET Signal Enhancement",
+                 color="white", fontsize=13, y=1.01)
+    fig.tight_layout()
+    _save(fig, save_path)
 
 
-def plot_difference_map(raw_upscaled, enhanced, save_path=None):
-    """
-    Show the pixel-level difference between the naively upscaled version
-    and the full enhancement — this highlights what the algorithm actually adds.
-    """
-    diff = enhanced - raw_upscaled
-    vabs = np.nanpercentile(np.abs(diff), 98)
+def plot_difference_map(naive_up, enhanced, save_path: str):
+    """Signed difference: what the full pipeline adds over a naive upscale."""
+    diff = enhanced - naive_up
+    vabs = float(np.nanpercentile(np.abs(diff), 98))
+    if vabs == 0:
+        vabs = 1.0
 
     fig, ax = plt.subplots(figsize=(10, 5), facecolor="#0d0d0d")
     ax.set_facecolor("#0d0d0d")
-
     im = ax.imshow(
         diff, aspect="auto", origin="upper",
         vmin=-vabs, vmax=vabs, cmap="RdBu_r", interpolation="nearest",
     )
-    cbar = plt.colorbar(im, ax=ax, pad=0.01, fraction=0.02)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.92)
     cbar.set_label("ΔdBZ  (enhanced − naive upscale)", color="white", fontsize=9)
     cbar.ax.yaxis.set_tick_params(color="white")
     plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
 
-    ax.set_title("Difference Map — what the enhancement algorithm contributes",
+    ax.set_title("Difference Map — pipeline contribution over naive upscale",
                  color="white", fontsize=11)
     ax.tick_params(colors="white")
-    ax.set_xlabel("Gate", color="white")
-    ax.set_ylabel("Ray", color="white")
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Saved: {os.path.abspath(save_path)}")
-        plt.close(fig)
-    else:
-        plt.show()
+    ax.set_xlabel("Column", color="white")
+    ax.set_ylabel("Row", color="white")
+    fig.tight_layout()
+    _save(fig, save_path)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    radar = None
     raw = None
-    
-    # 1. Try to load real data
-    if os.path.exists(FILE_PATH):
+
+    # 1. Load data
+    if args.f:
+        filepath = os.path.join(DATA_DIR, args.f)
         try:
-            radar = read_radar(FILE_PATH)
-            raw   = get_field_array(radar, FIELD, sweep=SWEEP)
-            print(f"\n[OK] Loaded real radar data from {os.path.basename(FILE_PATH)}")
+            radar = read_radar(filepath)
+            raw   = get_field_array(radar, "reflectivity")
+            print(f"[OK] Loaded: {args.f}  shape={raw.shape}")
         except Exception as e:
-            print(f"\n[!] Failed to read real radar file: {e}")
-            print("    Falling back to synthetic data.")
+            print(f"[!] Could not load '{args.f}': {e}")
     else:
-        print(f"\n[!] Radar file not found at {FILE_PATH}")
-        print("    Falling back to synthetic data.")
+        # Auto-discover newest AEMET gif
+        gifs = sorted(
+            [f for f in os.listdir(DATA_DIR) if f.startswith("aemet_") and f.endswith(".gif")],
+            reverse=True,
+        )
+        if gifs:
+            try:
+                radar = read_radar(os.path.join(DATA_DIR, gifs[0]))
+                raw   = get_field_array(radar, "reflectivity")
+                print(f"[OK] Auto-loaded: {gifs[0]}  shape={raw.shape}")
+            except Exception as e:
+                print(f"[!] Auto-load failed: {e}")
 
-    # 2. Fallback to synthetic if real load failed
     if raw is None:
-        print("\n--- Radar Signal Enhancement Demo (Synthetic) ---")
-        raw = generate_synthetic_radar_field()
-        print("[OK] Synthetic radar field generated.")
-    else:
-        print("\n--- Radar Signal Enhancement (Real Data) ---")
+        print("[OK] Using synthetic radar field.")
+        raw = generate_synthetic_radar_field(h=760, w=760)
 
-    print(f"\nRaw field shape : {raw.shape}  (rays x gates)")
-    print(f"Value range     : {np.nanmin(raw):.1f} ... {np.nanmax(raw):.1f} dBZ")
-    print(f"SNR estimate    : {compute_snr(raw):.1f} dB\n")
+    print(f"\n--- AEMET Radar Enhancement ---")
+    print(f"Raw shape  : {raw.shape}")
+    print(f"Value range: {np.nanmin(raw):.1f} … {np.nanmax(raw):.1f} dBZ")
+    print(f"SNR (raw)  : {compute_snr(raw):.1f} dB\n")
 
-    # 2. Run each pipeline step individually (for the 4-panel plot)
+    # 2. Pipeline steps
     print("Step 1 — Denoising…")
-    denoised = denoise_gaussian(raw, sigma=1.0)
+    denoised = denoise_advanced(raw)
 
     print("Step 2 — Upscaling (2×)…")
     upscaled = upscale(denoised, scale=SCALE)
 
     print("Step 3 — Sharpening…")
-    enhanced = sharpen_unsharp_mask(upscaled, sigma=1.5, amount=1.2)
+    enhanced = sharpen_unsharp_mask(upscaled, sigma=1.5, amount=0.8)
 
-    # Naive upscale (no denoising / sharpening) — for the difference map
+    # Naive upscale for the difference map
     naive_up = upscale(raw, scale=SCALE, method="linear")
 
-    print(f"\nEnhanced shape  : {enhanced.shape}")
-    print(f"SNR after enh.  : {compute_snr(enhanced):.1f} dB\n")
+    print(f"\nEnhanced shape : {enhanced.shape}")
+    print(f"SNR (enhanced) : {compute_snr(enhanced):.1f} dB\n")
 
-    # 3. Generate plots
+    # 3. Plots
     print("Generating plots…")
 
     plot_pipeline_steps(

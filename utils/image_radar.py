@@ -1,103 +1,121 @@
 """
 utils/image_radar.py
 --------------------
-Utilities for converting processed radar images (AEMET/Meteocat)
-back into numerical reflectivity fields (dBZ).
+Converts AEMET radar GIF images into numerical reflectivity fields (dBZ).
 """
 
+from __future__ import annotations
 import os
 import numpy as np
 from PIL import Image
 
-# ── AEMET Palette Mapping (Approximate) ──────────────────────────────────────
-# Based on common AEMET reflectivity scales.
+
+# ── AEMET Palette ─────────────────────────────────────────────────────────────
+# Each entry: (RGB tuple, dBZ value)
+# Background / non-signal colours all map to -10.0 (treated as no-data).
 AEMET_PALETTE = [
-    ([0, 0, 0],       -10.0), # Black Background
-    ([127, 127, 127], -10.0), # Grey Background
-    ([255, 255, 255], -10.0), # White Background / Grid
-    ([200, 0, 90],    -10.0), # Boundary color (ignore)
-    ([150, 150, 150], -10.0), # Alt Grey
-    ([100, 100, 100], -10.0), # Dark Grey
-    ([0, 0, 252],     12.0),  # Light Blue
-    ([0, 148, 252],   18.0),  # Mid Blue
-    ([0, 252, 252],   24.0),  # Cyan
-    ([0, 160, 0],     30.0),  # Dark Green
-    ([0, 252, 0],     36.0),  # Bright Green
-    ([252, 252, 0],   42.0),  # Yellow
-    ([252, 172, 0],   48.0),  # Orange
-    ([252, 116, 0],   54.0),  # Deep Orange
-    ([252, 0, 0],     60.0),  # Red
-    ([188, 0, 0],     66.0),  # Dark Red
-    ([252, 0, 252],   72.0),  # Purple/Magenta
+    # --- Background / ignore colours ---
+    ([0,   0,   0  ], -10.0),  # Black background
+    ([255, 255, 255], -10.0),  # White / grid lines
+    ([127, 127, 127], -10.0),  # Mid grey
+    ([150, 150, 150], -10.0),  # Light grey
+    ([100, 100, 100], -10.0),  # Dark grey
+    ([200, 0,   90 ], -10.0),  # Boundary pink — ignore
+    # --- Signal colours (low → high dBZ) ---
+    ([0,   0,   252], 12.0),   # Blue
+    ([0,   148, 252], 18.0),   # Sky blue
+    ([0,   252, 252], 24.0),   # Cyan
+    ([0,   160, 0  ], 30.0),   # Dark green
+    ([0,   252, 0  ], 36.0),   # Bright green
+    ([252, 252, 0  ], 42.0),   # Yellow
+    ([252, 172, 0  ], 48.0),   # Orange
+    ([252, 116, 0  ], 54.0),   # Deep orange
+    ([252, 0,   0  ], 60.0),   # Red
+    ([188, 0,   0  ], 66.0),   # Dark red
+    ([252, 0,   252], 72.0),   # Magenta / purple
 ]
 
-def image_to_dbz(image_path: str, source: str = "aemet") -> np.ndarray:
+# Pre-build arrays for vectorised matching (avoids per-pixel Python loops)
+_PALETTE_COLORS = np.array([c for c, _ in AEMET_PALETTE], dtype=np.int32)   # (N, 3)
+_PALETTE_VALUES = np.array([v for _, v in AEMET_PALETTE], dtype=np.float32)  # (N,)
+
+# Maximum L-inf distance to accept a colour match.
+# 15 is tight enough to separate palette entries (which differ by ~50+ per channel)
+# while still handling minor JPEG/GIF compression artefacts.
+_MATCH_THRESHOLD = 15
+
+
+def image_to_dbz(image_path: str) -> np.ndarray:
     """
-    Loads an image and maps its RGB colors to dBZ values.
-    Returns a 2D NumPy array.
+    Load an AEMET radar image and map every pixel to a dBZ value.
+
+    Returns
+    -------
+    2-D float32 array shaped (H, W).  Pixels that do not match any palette
+    colour are set to -10.0 (background / no-data).
     """
-    img = Image.open(image_path).convert("RGB")
-    data = np.array(img)
-    h, w, _ = data.shape
-    
-    # Initialize with NaN or low value
-    dbz = np.full((h, w), -10.0, dtype=np.float32)
-    
-    palette = AEMET_PALETTE # Default
-    
-    # Vectorized color matching (find closest color in palette)
-    # For small palettes, this is fast enough.
-    for color, val in palette:
-        # [v3.7 Fix] Cast to int to prevent uint8 overflow/underflow during subtraction
-        diff = np.abs(data.astype(int) - np.array(color).astype(int))
-        mask = np.all(diff < 30, axis=-1)
-        dbz[mask] = val
-        
-    # Apply circular mask to remove legend and text artifacts
-    dbz = apply_circular_mask(dbz)
-        
+    img  = Image.open(image_path).convert("RGB")
+    data = np.array(img, dtype=np.int32)          # (H, W, 3)
+    H, W = data.shape[:2]
+
+    dbz = np.full((H, W), -10.0, dtype=np.float32)
+
+    # Vectorised: compute L-inf distance to every palette colour simultaneously
+    # data[:,:,None,:] shape: (H, W, 1, 3)
+    # _PALETTE_COLORS shape:  (N, 3) → broadcast to (1, 1, N, 3)
+    diff      = np.abs(data[:, :, None, :] - _PALETTE_COLORS[None, None, :, :])  # (H,W,N,3)
+    linf_dist = diff.max(axis=-1)                                                  # (H,W,N)
+    min_dist  = linf_dist.min(axis=-1)                                             # (H,W)
+    best_idx  = linf_dist.argmin(axis=-1)                                          # (H,W)
+
+    matched = min_dist <= _MATCH_THRESHOLD
+    dbz[matched] = _PALETTE_VALUES[best_idx[matched]]
+
+    # Remove legend box, range rings, and text by masking outside the radar circle
+    dbz = _apply_circular_mask(dbz)
+
     return dbz
 
-def apply_circular_mask(dbz):
-    """
-    Sets everything outside the central radar circle to -10.0 (background).
-    """
-    h, w = dbz.shape
-    center_y, center_x = h // 2, w // 2
-    # Radius is usually ~90-95% of the half-width
-    radius = min(center_y, center_x) * 0.92
-    
-    y, x = np.ogrid[:h, :w]
-    dist_from_center = np.sqrt((y - center_y)**2 + (x - center_x)**2)
-    
-    mask = dist_from_center > radius
-    dbz[mask] = -10.0
+
+def _apply_circular_mask(dbz: np.ndarray) -> np.ndarray:
+    """Zero out everything outside the main radar disc."""
+    H, W = dbz.shape
+    cy, cx = H // 2, W // 2
+    # Use 0.90 of the shorter half-axis — keeps the full scan but removes the
+    # legend strip that AEMET places in the corners.
+    radius = min(cy, cx) * 0.90
+
+    y, x = np.ogrid[:H, :W]
+    outside = (y - cy) ** 2 + (x - cx) ** 2 > radius ** 2
+    dbz[outside] = -10.0
     return dbz
+
+
+# ── ImageRadarMock ────────────────────────────────────────────────────────────
 
 class ImageRadarMock:
     """
-    A mock class that mimics a Py-ART Radar object but contains data 
-    loaded from an image.
+    Minimal stand-in for a Py-ART Radar object built from an AEMET image.
+    Exposes only what the pipeline scripts actually use.
     """
-    def __init__(self, filepath: str, source: str = "aemet"):
+
+    def __init__(self, filepath: str):
         self.filepath = filepath
-        self.source = source
+        dbz_field = image_to_dbz(filepath)
+
         self.fields = {
-            "reflectivity": {
-                "data": image_to_dbz(filepath, source)
-            }
+            "reflectivity": {"data": dbz_field}
         }
-        # Mock metadata
-        self.metadata = {"instrument_name": f"{source.upper()} Image-based Radar"}
-        self.latitude = {"data": [41.38]} # Default to Barcelona-ish
-        self.longitude = {"data": [2.17]}
-        self.altitude = {"data": [0]}
-        self.nsweeps = 1
-        
-    def get_start_end(self, sweep):
-        # For image-based, we only have 1 sweep which is the whole image
-        return 0, self.fields["reflectivity"]["data"].shape[0] - 1
+        self.metadata  = {"instrument_name": "AEMET Image Radar"}
+        self.latitude  = {"data": [40.0]}   # Approx centre of Spain
+        self.longitude = {"data": [-3.7]}
+        self.altitude  = {"data": [0]}
+        self.nsweeps   = 1
+
+    def get_start_end(self, sweep: int = 0):
+        n = self.fields["reflectivity"]["data"].shape[0]
+        return 0, n - 1
+
 
 def is_image_file(filepath: str) -> bool:
-    ext = os.path.splitext(filepath)[1].lower()
-    return ext in [".gif", ".png", ".jpg", ".jpeg", ".dat"] # .dat for the raw downloads we did
+    return os.path.splitext(filepath)[1].lower() in {".gif", ".png", ".jpg", ".jpeg"}
