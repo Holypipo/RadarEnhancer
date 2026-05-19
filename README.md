@@ -1,90 +1,86 @@
-# Radar_v1 — XRAD / NEXRAD Signal Enhancement
+# AEMET Radar Enhancement Pipeline
 
-A Python pipeline for reading, visualising, and enhancing weather radar data
-using neighbourhood-based signal processing and super-resolution techniques.
+A 4-step pipeline to fetch, visualise, enhance, and super-resolve AEMET radar data.
 
----
+## Setup
 
-## Project Structure
-
-```
-Radar_v1/
-├── requirements.txt          # Python dependencies
-├── 01_fetch_data.py          # Download a sample NEXRAD file (USA)
-├── 01_fetch_aemet.py         # Fetch latest AEMET radar (Spain)
-├── 01_fetch_meteocat.py      # Fetch latest Meteocat radar (Catalonia)
-├── 02_visualize.py           # Read and plot radar fields
-├── 03_enhance.py             # Enhancement algorithms (denoise → upscale → sharpen)
-├── 04_superresolution.py     # Advanced: CNN-based super-resolution skeleton
-├── web_app.py                # Interactive Streamlit Dashboard
-├── utils/
-│   ├── radar_io.py           # Multi-source reader (NEXRAD, AEMET, Meteocat)
-│   ├── enhancement.py        # Core enhancement functions
-│   └── image_radar.py        # Image-to-dBZ mapping utilities
-└── data/                     # Downloaded radar files land here
-```
-
----
-
-## Features
-
-- **Multi-Source Support**: 
-  - **NEXRAD (USA)**: Support for Level-II binary data.
-  - **AEMET (Spain)**: Live fetch via OpenData API (GIF to dBZ mapping).
-  - **Meteocat (Catalonia)**: Support for XEMA API (PNG to dBZ mapping).
-- **Enhancement Engine**: Adaptive NLM Denoising + Unsharp Masking.
-- **Super-Resolution**: RadarResNet-v2 (SRCNN variant) for high-fidelity upscaling.
-- **Interactive Dashboard**: Real-time analysis and ROI zooming.
-
----
-
-## Quick Start
-
-### 1. Install dependencies
 ```bash
 pip install -r requirements.txt
+
+# For neural super-resolution (step 4) — CPU:
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# For neural super-resolution (step 4) — NVIDIA GPU:
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
-### 2. Run the Dashboard
+## Pipeline
+
+### Step 1 — Fetch radar image from AEMET
 ```bash
-streamlit run web_app.py
+python 01_fetch_aemet.py --radar nacional
+python 01_fetch_aemet.py --radar ba     # Barcelona
+python 01_fetch_aemet.py --radar se     # Sevilla
 ```
+Saves a `.gif` to `data/`.
 
-### 3. Fetch Data (CLI)
-For NEXRAD:
+### Step 2 — Visualise raw data
 ```bash
-python 01_fetch_data.py
+python 02_visualize.py
+python 02_visualize.py -f aemet_nacional_20260515_1146.gif
 ```
-For AEMET (Live):
+Saves to `data/plots/`:
+- `aemet_ppi.png` — circular PPI disc
+- `aemet_raw_array.png` — flat 2-D array view
+
+### Step 3 — Enhance
 ```bash
-python 01_fetch_aemet.py --radar ba
+python 03_enhance.py
+python 03_enhance.py -f aemet_nacional_20260515_1146.gif
+```
+Saves to `data/plots/`:
+- `enhance_pipeline_steps.png` — 4-panel step view
+- `enhance_before_after.png` — before / after comparison
+- `enhance_difference_map.png` — what the algorithm contributes
+- `enhanced_final_ppi.png` — **main output** (uses ResNet if trained)
+
+> If you run step 4 first to train the model, re-running step 3 will
+> automatically use neural super-resolution instead of bicubic.
+
+### Step 4 — Train neural super-resolution model
+```bash
+python 04_superresolution.py --epochs 20 --patches 500
+```
+Saves to `data/models/resnet_radar.pth` and `data/plots/resnet_training.png`.
+
+After training, re-run step 3 to get ResNet-enhanced output.
+
+## Recommended order for best results
+
+```bash
+python 01_fetch_aemet.py
+python 04_superresolution.py --epochs 30 --patches 1000   # train first
+python 02_visualize.py
+python 03_enhance.py                                        # now uses ResNet
 ```
 
----
-
-## How the Enhancement Works
+## File structure
 
 ```
-Raw radar signal (rays × gates)
-        │
-        ▼
-  [1] Denoising          ← Non-Local Means (NLM) or Gaussian filter
-        │
-        ▼
-  [2] SR Upscaling       ← RadarResNet-v2 (Residual Learning)
-        │
-        ▼
-  [3] Sharpening         ← Adaptive Unsharp masking
-        │
-        ▼
-Enhanced radar field
+RadarEnhancer/
+  01_fetch_aemet.py
+  02_visualize.py
+  03_enhance.py
+  04_superresolution.py
+  requirements.txt
+  utils/
+    __init__.py
+    image_radar.py      # GIF -> dBZ conversion
+    radar_io.py         # file reading
+    enhancement.py      # denoise / upscale / sharpen pipeline
+    resnet.py           # RadarResNet architecture (requires torch)
+  data/
+    *.gif               # downloaded AEMET images (you create these)
+    plots/              # all output plots saved here
+    models/             # trained ResNet weights saved here
 ```
-
-The pipeline preserves meteorological structure while removing noise artifacts. For image-based sources (AEMET/Meteocat), the system reverse-engineers the color palette back into numerical dBZ values before processing.
-
-### Roadmap
-- [x] Multi-source API integration (AEMET)
-- [x] Residual Learning for Super-Resolution
-- [ ] Attenuation correction (Z-PHI method)
-- [ ] Kalman filter for temporal smoothing
-- [ ] Export to GeoTIFF for GIS use

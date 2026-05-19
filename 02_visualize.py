@@ -40,18 +40,27 @@ DATA_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLOTS_DIR = os.path.join(DATA_DIR, "plots")
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
-# ── Colour map (NWS-style reflectivity) ──────────────────────────────────────
+# ── Colour map matched to AEMET dBZ palette ──────────────────────────────────
 _REF_COLORS = [
-    "#646464", "#04e9e7", "#019ff4", "#0300f4",
-    "#02fd02", "#01c501", "#008e00", "#fdf802",
-    "#e5bc00", "#fd9500", "#fd0000", "#d40000",
-    "#bc0000", "#f800fd", "#9854c6",
+    "#000080",   # 0  dBZ — dark navy (near-zero signal)
+    "#0000FC",   # 12 dBZ — blue
+    "#0094FC",   # 18 dBZ — sky blue
+    "#00FCFC",   # 24 dBZ — cyan
+    "#00C000",   # 30 dBZ — dark green
+    "#00FC00",   # 36 dBZ — bright green
+    "#FCFC00",   # 42 dBZ — yellow
+    "#FCAC00",   # 48 dBZ — orange
+    "#FC7400",   # 54 dBZ — deep orange
+    "#FC0000",   # 60 dBZ — red
+    "#BC0000",   # 66 dBZ — dark red
+    "#FC00FC",   # 72 dBZ — magenta
 ]
 _REF_NODES  = np.linspace(0, 1, len(_REF_COLORS))
 NWS_REF_CMAP = mcolors.LinearSegmentedColormap.from_list(
-    "nws_ref", list(zip(_REF_NODES, _REF_COLORS))
+    "nws_aemet", list(zip(_REF_NODES, _REF_COLORS))
 )
-VMIN, VMAX = -10.0, 75.0
+NWS_REF_CMAP.set_bad(color="black")   # NaN pixels render as black
+VMIN, VMAX = 0.0, 72.0
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────

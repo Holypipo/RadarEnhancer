@@ -56,38 +56,42 @@ def denoise_gaussian(
 
 def denoise_advanced(data: np.ndarray, h: float = 0.8) -> np.ndarray:
     """
-    Enhanced denoising for AEMET images.
+    Boundary-preserving palette smoother for AEMET radar images.
 
-    Uses Non-Local Means when skimage is available and the array is small
-    enough to be practical (<= 512 px on the shorter side).  Falls back to
-    a two-pass Gaussian for large images (760×760 NLM takes several minutes).
+    AEMET GIFs are palette-quantised: every signal pixel is exactly 12, 18,
+    24 … 72 dBZ with no spatial noise.  Classic denoisers (Gaussian, NLM)
+    spread the kernel across the NaN background, inflating each 1-pixel dot
+    into a large blob.  This function smooths ONLY within the existing signal
+    footprint — never expanding it into background pixels.
+
+    What it does:
+      • Softens the hard step-edges between adjacent palette levels
+        (e.g. a 12 dBZ pixel next to an 18 dBZ pixel gets blended to ~15 dBZ)
+      • Zero boundary expansion — the signal footprint is preserved exactly
+      • Fast: single Gaussian pass with a small sigma
 
     Parameters
     ----------
-    data : 2-D float array in dBZ
-    h    : denoising strength (higher = smoother, 0.6–1.0 is a good range)
+    data : 2-D float32 array in dBZ, NaN = background / no-data
+    h    : unused (kept for API compatibility)
     """
-    short_side = min(data.shape)
+    nan_mask    = np.isnan(data)
+    signal_mask = ~nan_mask           # pixels that actually have signal
 
-    if short_side <= 512:
-        try:
-            from skimage.restoration import denoise_nl_means, estimate_sigma
-            valid = np.nan_to_num(data, nan=-10.0)
-            d_min, d_max = -32.0, 75.0
-            norm = (valid - d_min) / (d_max - d_min)
-            sigma_est = float(np.mean(estimate_sigma(norm)))
-            denoised  = denoise_nl_means(
-                norm, h=h * sigma_est, fast_mode=True,
-                patch_size=5, patch_distance=6,
-            )
-            return (denoised * (d_max - d_min) + d_min).astype(np.float32)
-        except Exception:
-            pass  # fall through to Gaussian
+    filled   = np.where(nan_mask, 0.0, data)
+    weight   = np.where(nan_mask, 0.0, 1.0)
 
-    # Fast fallback: two-pass Gaussian (coarse + fine)
-    result = denoise_gaussian(data, sigma=1.2)
-    result = denoise_gaussian(result, sigma=0.6)
-    return result
+    # Small sigma: enough to blend adjacent palette levels, not enough to expand
+    smoothed = gaussian_filter(filled, sigma=0.8)
+    norm     = gaussian_filter(weight, sigma=0.8)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        blended = np.where(norm > 0, smoothed / norm, data)
+
+    # Write blended values ONLY where there was already signal — strict boundary
+    result = data.copy()
+    result[signal_mask] = blended[signal_mask]
+    return result.astype(np.float32)
 
 
 # ── 2. Upscaling ─────────────────────────────────────────────────────────────
@@ -100,19 +104,32 @@ def upscale(
     """
     Upscale a 2-D radar field by an integer factor using grid interpolation.
 
+    NaN pixels (background) are handled carefully: the interpolator fills NaN
+    regions with the nearest signal value so that linear blending at signal
+    edges doesn't fade toward zero — the NaN mask is then re-applied strictly
+    to restore the correct background.
+
     Parameters
     ----------
-    data   : 2-D float array (H × W)
+    data   : 2-D float array (H × W), NaN = background
     scale  : integer upscaling factor  (2 → double resolution)
-    method : 'linear' (smooth) or 'nearest' (crisp, for masks)
+    method : 'linear' (smooth) or 'nearest' (crisp edges)
     """
     H, W     = data.shape
     nan_mask = np.isnan(data)
 
+    # Fill NaN with nearest-neighbour signal values so the interpolator
+    # doesn't blend toward 0 at signal boundaries
+    if np.any(nan_mask) and np.any(~nan_mask):
+        from scipy.ndimage import distance_transform_edt
+        _, idx = distance_transform_edt(nan_mask, return_indices=True)
+        filled = data[idx[0], idx[1]]          # nearest-signal fill
+        filled = np.where(nan_mask, filled, data)
+    else:
+        filled = np.where(nan_mask, 0.0, data)
+
     y_old = np.linspace(0.0, 1.0, H)
     x_old = np.linspace(0.0, 1.0, W)
-    filled = np.where(nan_mask, 0.0, data)
-
     interp = RegularGridInterpolator(
         (y_old, x_old), filled, method=method,
         bounds_error=False, fill_value=np.nan,
@@ -123,7 +140,7 @@ def upscale(
     yy, xx = np.meshgrid(y_new, x_new, indexing="ij")
     upscaled = interp((yy, xx))
 
-    # Propagate NaN mask
+    # Re-apply NaN mask: use nearest interpolation of original mask
     nan_interp = RegularGridInterpolator(
         (y_old, x_old), nan_mask.astype(float), method="nearest",
         bounds_error=False, fill_value=1.0,
@@ -164,26 +181,25 @@ def enhance_field(
     data: np.ndarray,
     denoise_h: float = 0.6,
     scale: int = 2,
-    sharpen_amount: float = 0.8,
+    sharpen_amount: float = 0.5,
     use_resnet: bool = True,
 ) -> np.ndarray:
     """
     Full AEMET radar enhancement pipeline:
-      1. Denoising        (Gaussian / NLM)
-      2. Super-resolution (ResNet if trained weights exist, else bicubic)
-      3. Post-upscaling smooth  (removes checkerboard / grid artefacts)
-      4. Peak conservatism      (prevents overestimation)
-      5. Edge sharpening        (subtle, signal-only)
+      1. Palette smoother  (softens hard dBZ level edges, no boundary expansion)
+      2. Super-resolution  (ResNet if trained weights exist, else bicubic)
+      3. Edge sharpening   (unsharp mask, signal pixels only)
+      4. dBZ clip          (prevents values leaving physical range)
 
     Parameters
     ----------
-    data           : raw dBZ array from AEMET GIF
-    denoise_h      : NLM strength (ignored when Gaussian fallback is used)
-    scale          : upscaling factor
-    sharpen_amount : unsharp-mask boost
-    use_resnet     : attempt ResNet SR if trained weights are present
+    data           : raw dBZ array from AEMET GIF (NaN = background)
+    denoise_h      : unused — kept for API compat
+    scale          : upscaling factor (2 = double resolution)
+    sharpen_amount : unsharp-mask boost strength
+    use_resnet     : use trained ResNet if weights are present
     """
-    # [1] Denoise
+    # [1] Palette smoother — softens step edges, strict boundary preservation
     denoised = denoise_advanced(data, h=denoise_h)
 
     # [2] Super-resolution
@@ -200,21 +216,18 @@ def enhance_field(
     else:
         enhanced = upscale(denoised, scale=scale)
 
-    # [3] Post-upsampling smoothing (removes PixelShuffle checkerboard)
-    enhanced = gaussian_filter(enhanced, sigma=0.6)
+    # [3] Subtle edge sharpening — signal pixels only, conservative amount
+    nan_mask_e = np.isnan(enhanced)
+    filled_e   = np.where(nan_mask_e, 0.0, enhanced)
+    blur_e     = gaussian_filter(filled_e, sigma=1.2)
+    sharpened  = filled_e + sharpen_amount * (filled_e - blur_e)
+    sharpened[nan_mask_e] = np.nan
 
-    # [4] Reflectivity conservatism — don't let peak exceed original
-    orig_max = np.nanmax(denoised)
-    enh_max  = np.nanmax(enhanced)
-    if enh_max > orig_max > 0:
-        enhanced = enhanced * (orig_max / enh_max)
+    # [4] Clip to physical dBZ range, restore NaN background
+    result = np.clip(sharpened, 0.0, 75.0)
+    result[nan_mask_e] = np.nan
 
-    # [5] Subtle edge sharpening (signal pixels only)
-    signal_mask = enhanced > 5.0
-    sharpened   = sharpen_unsharp_mask(enhanced, sigma=0.8, amount=sharpen_amount * 0.4)
-    enhanced    = np.where(signal_mask, sharpened, enhanced)
-
-    return enhanced
+    return result
 
 
 # ── 5. ResNet (lazy import) ───────────────────────────────────────────────────
@@ -273,14 +286,15 @@ def _run_resnet(data: np.ndarray, scale: int = 2) -> np.ndarray:
 
 def compute_snr(data: np.ndarray) -> float:
     """
-    Simple SNR estimate: mean of top-10% reflectivity minus mean of bottom-90%.
+    Estimate SNR: mean of top-10% signal pixels minus mean of bottom-90%.
+    Works correctly with NaN backgrounds — only real signal pixels are used.
     Returns 0.0 for empty / all-NaN arrays.
     """
-    valid = data[~np.isnan(data)]
-    if len(valid) == 0:
+    valid = data[np.isfinite(data)]
+    if len(valid) < 10:
         return 0.0
     sorted_v = np.sort(valid)
-    idx      = int(len(sorted_v) * 0.9)
+    idx = int(len(sorted_v) * 0.9)
     return float(sorted_v[idx:].mean() - sorted_v[:idx].mean())
 
 

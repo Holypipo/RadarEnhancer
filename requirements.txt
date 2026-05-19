@@ -1,12 +1,26 @@
-arm-pyart
-matplotlib
-numpy
-scipy
-netCDF4
-h5py
-Pillow
-streamlit
-folium
-streamlit-folium
-tqdm
-requests
+# ── AEMET Radar Enhancement Pipeline ─────────────────────────────────────────
+# Install with:  pip install -r requirements.txt
+#
+# For PyTorch (step 4 - neural super-resolution), install separately:
+#   CPU only (any OS):
+#       pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   NVIDIA GPU (Windows/Linux):
+#       pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   Apple Silicon (macOS):
+#       pip install torch          (MPS backend included automatically)
+
+# Core data / numerical
+numpy>=1.24
+scipy>=1.10
+
+# Image I/O
+Pillow>=10.0
+
+# Plotting
+matplotlib>=3.7
+
+# HTTP (step 1 - AEMET API fetch)
+requests>=2.31
+
+# Image quality / denoising (optional but improves step 3)
+scikit-image>=0.21

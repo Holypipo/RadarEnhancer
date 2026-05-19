@@ -14,18 +14,19 @@ from PIL import Image
 # Each entry: (RGB tuple, dBZ value)
 # Background / non-signal colours all map to -10.0 (treated as no-data).
 AEMET_PALETTE = [
-    # --- Background / ignore colours ---
-    ([0,   0,   0  ], -10.0),  # Black background
-    ([255, 255, 255], -10.0),  # White / grid lines
-    ([127, 127, 127], -10.0),  # Mid grey
-    ([150, 150, 150], -10.0),  # Light grey
-    ([100, 100, 100], -10.0),  # Dark grey
-    ([200, 0,   90 ], -10.0),  # Boundary pink — ignore
+    # --- Background / non-signal colours → NaN (rendered as transparent/black) ---
+    ([0,   0,   0  ], np.nan),  # Black — inside disc but no signal
+    ([255, 255, 255], np.nan),  # White / grid lines
+    ([127, 127, 127], np.nan),  # Mid grey — outer background
+    ([150, 150, 150], np.nan),  # Light grey variant
+    ([100, 100, 100], np.nan),  # Dark grey variant
+    ([200, 0,   90 ], np.nan),  # Boundary / radar-circle outline — ignore
     # --- Signal colours (low → high dBZ) ---
+    # Exact RGB values sampled from real AEMET GIFs (verified against pixel data).
     ([0,   0,   252], 12.0),   # Blue
     ([0,   148, 252], 18.0),   # Sky blue
     ([0,   252, 252], 24.0),   # Cyan
-    ([0,   160, 0  ], 30.0),   # Dark green
+    ([0,   192, 0  ], 30.0),   # Dark green  ← was (0,160,0) — FIXED
     ([0,   252, 0  ], 36.0),   # Bright green
     ([252, 252, 0  ], 42.0),   # Yellow
     ([252, 172, 0  ], 48.0),   # Orange
@@ -51,18 +52,18 @@ def image_to_dbz(image_path: str) -> np.ndarray:
 
     Returns
     -------
-    2-D float32 array shaped (H, W).  Pixels that do not match any palette
-    colour are set to -10.0 (background / no-data).
+    2-D float32 array shaped (H, W).
+    Signal pixels  → dBZ value (12 … 72).
+    Background / unmatched pixels → np.nan (renders as transparent/black).
     """
     img  = Image.open(image_path).convert("RGB")
     data = np.array(img, dtype=np.int32)          # (H, W, 3)
     H, W = data.shape[:2]
 
-    dbz = np.full((H, W), -10.0, dtype=np.float32)
+    # Start fully NaN — unmatched pixels stay NaN (background)
+    dbz = np.full((H, W), np.nan, dtype=np.float32)
 
-    # Vectorised: compute L-inf distance to every palette colour simultaneously
-    # data[:,:,None,:] shape: (H, W, 1, 3)
-    # _PALETTE_COLORS shape:  (N, 3) → broadcast to (1, 1, N, 3)
+    # Vectorised L-inf distance to every palette colour simultaneously
     diff      = np.abs(data[:, :, None, :] - _PALETTE_COLORS[None, None, :, :])  # (H,W,N,3)
     linf_dist = diff.max(axis=-1)                                                  # (H,W,N)
     min_dist  = linf_dist.min(axis=-1)                                             # (H,W)
@@ -70,24 +71,22 @@ def image_to_dbz(image_path: str) -> np.ndarray:
 
     matched = min_dist <= _MATCH_THRESHOLD
     dbz[matched] = _PALETTE_VALUES[best_idx[matched]]
+    # NaN palette entries (background colours) stay NaN even when matched
 
-    # Remove legend box, range rings, and text by masking outside the radar circle
+    # Mask outside the radar disc → NaN
     dbz = _apply_circular_mask(dbz)
 
     return dbz
 
 
 def _apply_circular_mask(dbz: np.ndarray) -> np.ndarray:
-    """Zero out everything outside the main radar disc."""
+    """Set everything outside the main radar disc to NaN."""
     H, W = dbz.shape
     cy, cx = H // 2, W // 2
-    # Use 0.90 of the shorter half-axis — keeps the full scan but removes the
-    # legend strip that AEMET places in the corners.
     radius = min(cy, cx) * 0.90
-
     y, x = np.ogrid[:H, :W]
     outside = (y - cy) ** 2 + (x - cx) ** 2 > radius ** 2
-    dbz[outside] = -10.0
+    dbz[outside] = np.nan
     return dbz
 
 
