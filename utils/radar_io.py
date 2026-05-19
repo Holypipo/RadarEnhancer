@@ -1,20 +1,19 @@
 """
 utils/radar_io.py
 -----------------
-Radar file reading and field extraction — AEMET GIF edition.
+Radar file reading and field extraction.
 
-Supported inputs
-----------------
-  • AEMET radar GIF / PNG images  → ImageRadarMock  (always available)
-  • NEXRAD / ODIM / CF-Radial     → Py-ART Radar    (if pyart installed)
+Supported sources
+-----------------
+  AEMET  (.gif / .png starting with 'aemet_')  → AemetRadar  (always available)
+  NEXRAD / ODIM / CF-Radial (binary)           → pyart.Radar (requires arm-pyart)
 """
 
 from __future__ import annotations
-
 import os
 import numpy as np
 
-from .image_radar import ImageRadarMock, is_image_file
+from .image_radar import AemetRadar, is_aemet_file
 
 try:
     import pyart
@@ -23,77 +22,67 @@ except ImportError:
     HAS_PYART = False
 
 
-# ── Reading ───────────────────────────────────────────────────────────────────
-
 def read_radar(filepath: str):
     """
-    Auto-detect format and return a radar data object.
+    Auto-detect source and return a radar data object.
 
     Returns
     -------
-    ImageRadarMock  for AEMET GIF/PNG files (no extra dependencies needed)
-    pyart.Radar     for NEXRAD/ODIM/CfRadial (requires pyart)
+    AemetRadar   for AEMET GIF/PNG files
+    pyart.Radar  for NEXRAD / ODIM / CfRadial (requires pyart)
 
     Raises
     ------
-    FileNotFoundError  if the file does not exist
-    ImportError        if no reader can handle the file
+    FileNotFoundError  – file does not exist
+    ImportError        – no reader available for this format
     """
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
 
     print(f"Reading: {os.path.basename(filepath)}")
 
-    # ── Image-based (AEMET) ───────────────────────────────────────────────
-    if is_image_file(filepath):
-        print("  Format: Image-based (AEMET)")
-        return ImageRadarMock(filepath)
+    if is_aemet_file(filepath):
+        print("  Source: AEMET image")
+        return AemetRadar(filepath)
 
-    # ── Binary radar formats (NEXRAD / ODIM / …) ─────────────────────────
     if HAS_PYART:
         try:
             radar = pyart.io.read(filepath)
-            print("  Format: Py-ART")
+            print("  Source: NEXRAD / Py-ART")
             return radar
         except Exception as e:
-            raise ImportError(f"Py-ART could not read '{filepath}': {e}") from e
+            raise ImportError(
+                f"Py-ART could not read '{os.path.basename(filepath)}': {e}"
+            ) from e
 
     raise ImportError(
-        "No radar reader available for this file type. "
-        "Install pyart ('pip install arm-pyart') for binary radar formats."
+        "No reader available for this file type. "
+        "Install arm-pyart ('pip install arm-pyart') for NEXRAD / binary formats."
     )
 
 
-# ── Field extraction ──────────────────────────────────────────────────────────
-
-def get_field_array(
-    radar,
-    field_name: str = "reflectivity",
-    sweep: int = 0,
-) -> np.ndarray:
+def get_field_array(radar, field_name: str = "reflectivity", sweep: int = 0) -> np.ndarray:
     """
-    Extract a radar field as a clean 2-D float32 NumPy array.
+    Extract a radar field as a clean 2-D float32 array.
 
     Parameters
     ----------
-    radar      : ImageRadarMock or pyart.Radar
-    field_name : field to extract (default 'reflectivity')
-    sweep      : sweep / elevation index (0 = lowest)
+    radar      : AemetRadar or pyart.Radar
+    field_name : field to extract
+    sweep      : elevation index (0 = lowest, AEMET always 0)
 
     Returns
     -------
-    2-D float32 array of shape (rays, gates) or (H, W) for image mocks
+    float32 (H, W) array — NaN where no signal / background
     """
-    # ── ImageRadarMock ────────────────────────────────────────────────────
-    if isinstance(radar, ImageRadarMock):
+    if isinstance(radar, AemetRadar):
         if field_name not in radar.fields:
             raise KeyError(
-                f"Field '{field_name}' not in ImageRadarMock. "
+                f"Field '{field_name}' not in AemetRadar. "
                 f"Available: {list(radar.fields.keys())}"
             )
         return radar.fields[field_name]["data"].copy()
 
-    # ── Py-ART Radar ──────────────────────────────────────────────────────
     if HAS_PYART and hasattr(radar, "fields"):
         if field_name not in radar.fields:
             raise KeyError(
@@ -106,6 +95,4 @@ def get_field_array(
             data = data.filled(np.nan)
         return data.astype(np.float32)
 
-    raise ValueError(
-        "Unrecognised radar object. Pass an ImageRadarMock or a pyart.Radar."
-    )
+    raise ValueError("Unrecognised radar object. Pass AemetRadar or pyart.Radar.")

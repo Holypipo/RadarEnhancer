@@ -1,14 +1,15 @@
 """
 02_visualize.py
 ---------------
-Visualise an AEMET radar GIF as a publication-quality reflectivity plot.
+Visualise an AEMET radar GIF as publication-quality plots.
 
-Produces (all saved to data/plots/):
-    • aemet_ppi.png          — circular radar disc (true PPI appearance)
-    • aemet_raw_array.png    — flat 2-D array view (rays × gates / H × W)
+Outputs (saved to data/02_visualize/):
+    02_Ppi_DDMMYYYY_HHMM.png       -- circular radar disc
+    02_RawArray_DDMMYYYY_HHMM.png  -- flat 2-D dBZ array
 
 Usage:
-    python 02_visualize.py -f aemet_nacional_20260515_1115.gif
+    python 02_visualize.py                                      # auto-loads newest from data/01_fetch/
+    python 02_visualize.py -f 01_AemetNacional_19052026_1043.gif
 """
 
 from __future__ import annotations
@@ -18,138 +19,73 @@ import sys
 import argparse
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")                      # non-interactive — always saves to file
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
-# ── Project imports ───────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.radar_io import read_radar, get_field_array
 from utils.enhancement import generate_synthetic_radar_field
+from utils.plot_utils import (
+    RADAR_CMAP, DBZ_VMIN, DBZ_VMAX,
+    dark_fig, style_ax, add_colorbar, save_fig,
+    make_save_path, dbz_imshow,
+)
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="Visualise AEMET radar data")
-parser.add_argument(
-    "-f", type=str, default=None,
-    help="GIF filename inside data/  (e.g. aemet_nacional_20260515_1115.gif)"
-)
+parser.add_argument("-f", type=str, default=None,
+    help="GIF filename inside data/01_fetch/ (e.g. 01_AemetNacional_19052026_1043.gif)")
 args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-PLOTS_DIR = os.path.join(DATA_DIR, "plots")
-os.makedirs(PLOTS_DIR, exist_ok=True)
-
-# ── Colour map matched to AEMET dBZ palette ──────────────────────────────────
-_REF_COLORS = [
-    "#000080",   # 0  dBZ — dark navy (near-zero signal)
-    "#0000FC",   # 12 dBZ — blue
-    "#0094FC",   # 18 dBZ — sky blue
-    "#00FCFC",   # 24 dBZ — cyan
-    "#00C000",   # 30 dBZ — dark green
-    "#00FC00",   # 36 dBZ — bright green
-    "#FCFC00",   # 42 dBZ — yellow
-    "#FCAC00",   # 48 dBZ — orange
-    "#FC7400",   # 54 dBZ — deep orange
-    "#FC0000",   # 60 dBZ — red
-    "#BC0000",   # 66 dBZ — dark red
-    "#FC00FC",   # 72 dBZ — magenta
-]
-_REF_NODES  = np.linspace(0, 1, len(_REF_COLORS))
-NWS_REF_CMAP = mcolors.LinearSegmentedColormap.from_list(
-    "nws_aemet", list(zip(_REF_NODES, _REF_COLORS))
-)
-NWS_REF_CMAP.set_bad(color="black")   # NaN pixels render as black
-VMIN, VMAX = 0.0, 72.0
+ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
+FETCH_DIR  = os.path.join(ROOT_DIR, "data", "01_fetch")
+OUT_DIR    = os.path.join(ROOT_DIR, "data", "02_visualize")
+os.makedirs(OUT_DIR, exist_ok=True)
 
 
-# ── Plotting ──────────────────────────────────────────────────────────────────
+# ── Plot functions ────────────────────────────────────────────────────────────
 
-def _dark_fig(figsize=(9, 8)):
-    fig, ax = plt.subplots(figsize=figsize, facecolor="#0d0d0d")
-    ax.set_facecolor("#0d0d0d")
-    return fig, ax
-
-
-def _style_ax(ax):
-    ax.tick_params(colors="white")
-    ax.xaxis.label.set_color("white")
-    ax.yaxis.label.set_color("white")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#333333")
-
-
-def _colorbar(fig, im, ax, label="Reflectivity (dBZ)"):
-    """Attach a colourbar to the right of ax."""
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.92)
-    cbar.set_label(label, color="white", fontsize=9)
-    cbar.ax.yaxis.set_tick_params(color="white")
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white", fontsize=8)
-    return cbar
-
-
-def _save(fig, path: str):
-    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-    print(f"  Saved → {path}")
-    plt.close(fig)
-
-
-def plot_ppi(data: np.ndarray, title: str, save_path: str):
-    """
-    Draw the data as a circular PPI disc — masks everything outside the
-    radar circle so it looks like a real radar product.
-    """
-    H, W = data.shape
+def PlotPpi(data: np.ndarray, title: str, save_path: str):
+    """Circular PPI disc — NaN background renders as black."""
+    H, W   = data.shape
     cy, cx = H / 2, W / 2
     radius = min(cy, cx) * 0.90
 
-    # Build a masked array: NaN outside the disc
-    y, x    = np.ogrid[:H, :W]
-    outside = (y - cy) ** 2 + (x - cx) ** 2 > radius ** 2
     display = data.copy()
-    display[outside] = np.nan
+    y, x    = np.ogrid[:H, :W]
+    display[(y - cy) ** 2 + (x - cx) ** 2 > radius ** 2] = np.nan
 
-    fig, ax = _dark_fig(figsize=(9, 9))
-    im = ax.imshow(
-        display,
-        origin="upper",
-        vmin=VMIN, vmax=VMAX,
-        cmap=NWS_REF_CMAP,
-        interpolation="bilinear",
-    )
+    fig, ax = dark_fig(figsize=(9, 9))
+    im = ax.imshow(display, origin="upper",
+                   vmin=DBZ_VMIN, vmax=DBZ_VMAX,
+                   cmap=RADAR_CMAP, interpolation="bilinear")
     ax.set_title(title, color="white", fontsize=13, pad=10)
-    ax.axis("off")                     # clean — no pixel coordinates shown
-    _colorbar(fig, im, ax)
-    _save(fig, save_path)
+    ax.axis("off")
+    add_colorbar(fig, im, ax)
+    save_fig(fig, save_path)
 
 
-def plot_raw_array(data: np.ndarray, title: str, save_path: str):
-    """Rectangular 2-D view of the raw dBZ array."""
-    fig, ax = _dark_fig(figsize=(12, 5))
-    im = ax.imshow(
-        data,
-        aspect="auto", origin="upper",
-        vmin=VMIN, vmax=VMAX,
-        cmap=NWS_REF_CMAP,
-        interpolation="nearest",
-    )
-    ax.set_title(title, color="white", fontsize=12)
-    ax.set_xlabel("Column (x / gate)", color="white")
-    ax.set_ylabel("Row (y / ray)", color="white")
-    _style_ax(ax)
-    _colorbar(fig, im, ax)
-    _save(fig, save_path)
+def PlotRawArray(data: np.ndarray, title: str, save_path: str):
+    """Rectangular 2-D view of the dBZ array."""
+    fig, ax = dark_fig(figsize=(12, 5))
+    im = dbz_imshow(ax, data, title)
+    style_ax(ax)
+    add_colorbar(fig, im, ax)
+    save_fig(fig, save_path)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    data = None
+    data  = None
     label = "Synthetic"
 
-    # 1. Try to load the requested file
     if args.f:
-        filepath = os.path.join(DATA_DIR, args.f)
+        filepath = os.path.join(FETCH_DIR, args.f)
+        if not os.path.exists(filepath):
+            # Try root data/ as fallback for manually placed files
+            filepath = os.path.join(ROOT_DIR, "data", args.f)
         try:
             radar = read_radar(filepath)
             data  = get_field_array(radar, "reflectivity")
@@ -157,48 +93,40 @@ def main():
             print(f"[OK] Loaded: {args.f}  shape={data.shape}")
         except Exception as e:
             print(f"[!] Could not load '{args.f}': {e}")
-            print("    Falling back to synthetic data.")
     else:
-        # Auto-discover newest AEMET gif in data/
         gifs = sorted(
-            [f for f in os.listdir(DATA_DIR) if f.startswith("aemet_") and f.endswith(".gif")],
+            [f for f in os.listdir(FETCH_DIR) if f.endswith(".gif")],
             reverse=True,
         )
         if gifs:
-            filepath = os.path.join(DATA_DIR, gifs[0])
             try:
-                radar = read_radar(filepath)
+                radar = read_radar(os.path.join(FETCH_DIR, gifs[0]))
                 data  = get_field_array(radar, "reflectivity")
                 label = os.path.splitext(gifs[0])[0]
-                print(f"[OK] Auto-loaded newest file: {gifs[0]}  shape={data.shape}")
+                print(f"[OK] Auto-loaded: {gifs[0]}  shape={data.shape}")
             except Exception as e:
                 print(f"[!] Auto-load failed: {e}")
 
-    # 2. Synthetic fallback
     if data is None:
         print("[OK] Using synthetic radar field.")
         data  = generate_synthetic_radar_field(h=760, w=760)
         label = "Synthetic"
 
-    print(f"Value range: {np.nanmin(data):.1f} … {np.nanmax(data):.1f} dBZ")
-    print(f"Signal pixels (>0 dBZ): {np.sum(data > 0):,}")
+    signal = int(np.sum(np.isfinite(data) & (data > 0)))
+    print(f"Value range   : {np.nanmin(data):.1f} ... {np.nanmax(data):.1f} dBZ")
+    print(f"Signal pixels : {signal:,}")
 
-    # 3. Produce plots
-    print("\nGenerating plots…")
+    print("\nGenerating plots...")
 
-    plot_ppi(
-        data,
-        title=f"AEMET Reflectivity — {label}",
-        save_path=os.path.join(PLOTS_DIR, "aemet_ppi.png"),
-    )
+    PlotPpi(data,
+        title=f"AEMET Reflectivity -- {label}",
+        save_path=make_save_path(OUT_DIR, "02", "Ppi"))
 
-    plot_raw_array(
-        data,
-        title=f"Raw dBZ Array — {label}  (shape {data.shape[0]}×{data.shape[1]})",
-        save_path=os.path.join(PLOTS_DIR, "aemet_raw_array.png"),
-    )
+    PlotRawArray(data,
+        title=f"Raw dBZ Array -- {label}  ({data.shape[0]}x{data.shape[1]})",
+        save_path=make_save_path(OUT_DIR, "02", "RawArray"))
 
-    print(f"\n[OK] Plots saved to: {PLOTS_DIR}")
+    print(f"\n[OK] Plots saved to: {OUT_DIR}")
     print("Next step: python 03_enhance.py")
 
 

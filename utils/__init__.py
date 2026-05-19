@@ -1,1 +1,1 @@
-# utils package — AEMET radar pipeline
+# utils package — AEMET / NEXRAD radar pipeline
