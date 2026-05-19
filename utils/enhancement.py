@@ -18,6 +18,8 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
 
+from config import get_resnet_model_path
+
 
 # ── 1. Denoising ──────────────────────────────────────────────────────────────
 
@@ -203,10 +205,7 @@ def enhance_field(
     denoised = denoise_advanced(data, h=denoise_h)
 
     # [2] Super-resolution
-    model_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "data", "models", "resnet_radar.pth",
-    )
+    model_path = get_resnet_model_path()
     if use_resnet and os.path.exists(model_path):
         try:
             enhanced = _run_resnet(denoised, scale=scale)
@@ -247,10 +246,7 @@ def _get_torch_model(scale: int):
     except ImportError:
         return None
 
-    model_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "data", "models", "resnet_radar.pth",
-    )
+    model_path = get_resnet_model_path()
     if not os.path.exists(model_path):
         return None
 
@@ -279,7 +275,30 @@ def _run_resnet(data: np.ndarray, scale: int = 2) -> np.ndarray:
         pred = model(inp).numpy()[0, 0]
 
     pred = gaussian_filter(pred, sigma=0.4)
-    return (pred * (d_max - d_min) + d_min).astype(np.float32)
+    result = (pred * (d_max - d_min) + d_min).astype(np.float32)
+    result[_resample_mask_nearest(np.isnan(data), result.shape)] = np.nan
+    return result
+
+
+def _resample_mask_nearest(mask: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """Resize a boolean mask with nearest-neighbour sampling."""
+    H, W = mask.shape
+    target_h, target_w = target_shape
+
+    y_old = np.linspace(0.0, 1.0, H)
+    x_old = np.linspace(0.0, 1.0, W)
+    y_new = np.linspace(0.0, 1.0, target_h)
+    x_new = np.linspace(0.0, 1.0, target_w)
+    yy, xx = np.meshgrid(y_new, x_new, indexing="ij")
+
+    interp = RegularGridInterpolator(
+        (y_old, x_old),
+        mask.astype(float),
+        method="nearest",
+        bounds_error=False,
+        fill_value=1.0,
+    )
+    return interp((yy, xx)) > 0.5
 
 
 # ── 6. Quality metric ─────────────────────────────────────────────────────────

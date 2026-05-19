@@ -13,12 +13,13 @@ import sys
 import requests
 import argparse
 from datetime import datetime
+from config import DATA_DIR, ensure_core_dirs
+from utils.logging_utils import configure_logging
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 BASE_URL = "https://api.meteo.cat/radar/v1/imatge"
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+ensure_core_dirs()
 
 def fetch_meteocat(api_key, radar_id="composicio"):
     url = f"{BASE_URL}/{radar_id}"
@@ -46,6 +47,8 @@ def fetch_meteocat(api_key, radar_id="composicio"):
         return None
 
 def main():
+    configure_logging("01_fetch_meteocat")
+
     parser = argparse.ArgumentParser(description="Fetch Meteocat Radar Data")
     parser.add_argument("--key", type=str, required=True, help="Meteocat API Key")
     parser.add_argument("--radar", type=str, default="composicio", help="Radar ID or 'composicio'")

@@ -23,6 +23,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import DATA_DIR, FETCH_DIR, VISUALIZE_DIR, ensure_core_dirs
+from utils.logging_utils import configure_logging
 from utils.radar_io import read_radar, get_field_array
 from utils.enhancement import generate_synthetic_radar_field
 from utils.plot_utils import (
@@ -38,10 +40,8 @@ parser.add_argument("-f", type=str, default=None,
 args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
-FETCH_DIR  = os.path.join(ROOT_DIR, "data", "01_fetch")
-OUT_DIR    = os.path.join(ROOT_DIR, "data", "02_visualize")
-os.makedirs(OUT_DIR, exist_ok=True)
+ensure_core_dirs()
+OUT_DIR = VISUALIZE_DIR
 
 
 # ── Plot functions ────────────────────────────────────────────────────────────
@@ -78,6 +78,8 @@ def PlotRawArray(data: np.ndarray, title: str, save_path: str):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_logging("02_visualize")
+
     data  = None
     label = "Synthetic"
 
@@ -85,7 +87,7 @@ def main():
         filepath = os.path.join(FETCH_DIR, args.f)
         if not os.path.exists(filepath):
             # Try root data/ as fallback for manually placed files
-            filepath = os.path.join(ROOT_DIR, "data", args.f)
+            filepath = os.path.join(DATA_DIR, args.f)
         try:
             radar = read_radar(filepath)
             data  = get_field_array(radar, "reflectivity")

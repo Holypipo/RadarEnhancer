@@ -3,8 +3,9 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 from datetime import datetime
+from config import DATA_DIR
 
-def download_nexrad_file(station, date_obj, time_obj, output_dir="data"):
+def download_nexrad_file(station, date_obj, time_obj, output_dir=None):
     """
     Downloads a NEXRAD Level 2 file from AWS S3.
     """
@@ -15,6 +16,9 @@ def download_nexrad_file(station, date_obj, time_obj, output_dir="data"):
         config=Config(signature_version=UNSIGNED)
     )
     bucket = 'noaa-nexrad-level2'
+    if output_dir is None:
+        output_dir = DATA_DIR
+    os.makedirs(output_dir, exist_ok=True)
     
     # Prefix format: YYYY/MM/DD/KXXX/
     # We list all files for that day and station to find the best time match

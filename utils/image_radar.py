@@ -28,6 +28,7 @@ AEMET_PALETTE = [
     ([0,   0,   252], 12.0),
     ([0,   148, 252], 18.0),
     ([0,   252, 252], 24.0),
+    ([67,  131, 35 ], 30.0),   # Dark green in real echoes on AEMET national GIFs
     ([0,   192, 0  ], 30.0),   # Dark green — verified fix (was 0,160,0)
     ([0,   252, 0  ], 36.0),
     ([252, 252, 0  ], 42.0),

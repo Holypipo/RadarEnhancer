@@ -14,9 +14,12 @@ from PIL import Image
 # Add root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from config import DATA_DIR, FETCH_DIR, ensure_core_dirs
 from utils.radar_io import read_radar, get_field_array
 from utils.enhancement import denoise_gaussian, upscale, sharpen_unsharp_mask, enhance_field, compute_snr, generate_synthetic_radar_field
 from utils.nexrad_fetcher import download_nexrad_file
+
+ensure_core_dirs()
 
 # ── Scientific Color Palette (AEMET Official) ─────────────────────────────────
 AEMET_REF_COLORS = ["#0000fc", "#0094fc", "#00fcfc", "#00a000", "#00fc00", "#fcfc00", "#fcac00", "#fc7400", "#fc0000", "#bc0000", "#fc00fc"]
@@ -58,7 +61,7 @@ with st.sidebar:
                 if src == "NEXRAD (USA)":
                     st_id = st.session_state.get('station_sel', 'KTLX').split(" ")[0]
                     dt, tm = st.session_state.get('date_sel', datetime(2013, 5, 20)), st.session_state.get('time_sel', datetime(2013, 5, 20, 19, 55).time())
-                    file_path, err = download_nexrad_file(st_id, dt, tm)
+                    file_path, err = download_nexrad_file(st_id, dt, tm, output_dir=str(DATA_DIR))
                     if file_path:
                         st.session_state['radar_obj'] = read_radar(file_path)
                         st.session_state['raw_data'] = get_field_array(st.session_state['radar_obj'], "reflectivity", sweep=0)
@@ -66,9 +69,10 @@ with st.sidebar:
                 elif src == "AEMET (Spain)":
                     st_id = st.session_state.get('station_sel', 'nacional').split(" ")[0]
                     subprocess.run(["py", "01_fetch_aemet.py", "--radar", st_id], capture_output=True)
-                    files = [f for f in os.listdir("data") if f.startswith(f"aemet_{st_id}") and f.endswith(".gif")]
+                    prefix = "01_AemetNacional" if st_id == "nacional" else f"01_Aemet{st_id.capitalize()}"
+                    files = [f for f in os.listdir(FETCH_DIR) if f.startswith(prefix) and f.endswith(".gif")]
                     if files:
-                        file_path = os.path.join("data", sorted(files)[-1])
+                        file_path = os.path.join(FETCH_DIR, sorted(files)[-1])
                         st.session_state['raw_file_path'] = file_path
                         st.session_state['radar_obj'] = read_radar(file_path)
                         st.session_state['raw_data'] = get_field_array(st.session_state['radar_obj'], "reflectivity")

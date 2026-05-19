@@ -32,6 +32,8 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import DATA_DIR, ENHANCE_DIR, FETCH_DIR, ensure_core_dirs, get_resnet_model_path
+from utils.logging_utils import configure_logging
 from utils.radar_io import read_radar, get_field_array
 from utils.image_radar import AemetRadar
 from utils.enhancement import (
@@ -52,11 +54,9 @@ args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCALE      = 2
-ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
-FETCH_DIR  = os.path.join(ROOT_DIR, "data", "01_fetch")
-OUT_DIR    = os.path.join(ROOT_DIR, "data", "03_enhance")
-MODEL_PATH = os.path.join(ROOT_DIR, "data", "04_ResNet", "resnet_radar.pth")
-os.makedirs(OUT_DIR, exist_ok=True)
+ensure_core_dirs()
+OUT_DIR    = ENHANCE_DIR
+MODEL_PATH = get_resnet_model_path()
 
 
 # ── Plot functions ────────────────────────────────────────────────────────────
@@ -186,6 +186,8 @@ def PlotEnhancedPpi(enhanced: np.ndarray, label: str,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_logging("03_enhance")
+
     raw              = None
     label            = "Synthetic"
     original_gif_path = None
@@ -194,7 +196,7 @@ def main():
     if args.f:
         filepath = os.path.join(FETCH_DIR, args.f)
         if not os.path.exists(filepath):
-            filepath = os.path.join(ROOT_DIR, "data", args.f)
+            filepath = os.path.join(DATA_DIR, args.f)
         try:
             radar = read_radar(filepath)
             raw   = get_field_array(radar, "reflectivity")

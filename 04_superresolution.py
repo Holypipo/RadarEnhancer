@@ -24,6 +24,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import FETCH_DIR, RESNET_DIR, RESNET_MODEL_PATH, ensure_core_dirs
+from utils.logging_utils import configure_logging
 from utils.enhancement import generate_synthetic_radar_field, compute_snr
 from utils.radar_io import read_radar, get_field_array
 from utils.plot_utils import (
@@ -32,11 +34,9 @@ from utils.plot_utils import (
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
-FETCH_DIR  = os.path.join(ROOT_DIR, "data", "01_fetch")
-OUT_DIR    = os.path.join(ROOT_DIR, "data", "04_ResNet")
-MODEL_PATH = os.path.join(OUT_DIR, "resnet_radar.pth")
-os.makedirs(OUT_DIR, exist_ok=True)
+ensure_core_dirs()
+OUT_DIR    = RESNET_DIR
+MODEL_PATH = RESNET_MODEL_PATH
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 SCALE         = 2
@@ -209,6 +209,8 @@ def VerifyOnAemet(model, gif_path: str):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_logging("04_superresolution")
+
     parser = argparse.ArgumentParser(description="Train RadarResNet")
     parser.add_argument("-f", type=str, default=None,
         help="AEMET GIF in data/01_fetch/ for post-training verification")

@@ -19,6 +19,8 @@ import urllib.request
 import tarfile
 import shutil
 import gzip
+from config import DATA_DIR, ensure_core_dirs
+from utils.logging_utils import configure_logging
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -35,12 +37,10 @@ TAR_URL = (
     f"2013%2F05%2F20%2FKTLX%2F{HOUR_TAR}?alt=media"
 )
 
-DATA_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+ensure_core_dirs()
 TAR_PATH   = os.path.join(DATA_DIR, HOUR_TAR)
 EXTRACT_DIR = os.path.join(DATA_DIR, "extracted_temp")
 FINAL_PATH = os.path.join(DATA_DIR, TARGET_FILE)
-
-os.makedirs(DATA_DIR, exist_ok=True)
 
 # ── Download ──────────────────────────────────────────────────────────────────
 
@@ -134,6 +134,8 @@ def extract_target():
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_logging("01_fetch_data")
+
     if os.path.exists(FINAL_PATH):
         print(f"File ready: {FINAL_PATH}")
     else:

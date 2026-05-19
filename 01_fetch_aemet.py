@@ -19,15 +19,13 @@ import time
 import requests
 import argparse
 from datetime import datetime
+from config import AEMET_API_KEY, AEMET_BASE_URL, FETCH_DIR, ensure_core_dirs
+from utils.logging_utils import configure_logging
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-API_KEY  = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiZXJuYXQubW9udGFuYUBnbWFpbC5jb20iLCJqdGkiOiIwMjQ1MDI3OC0wYTg5LTQ1NzktYjYzNS1kMDJlNWQwYWQ3OTAiLCJpc3MiOiJBRU1FVCIsImlhdCI6MTc3MzgzMTM5NiwidXNlcklkIjoiMDI0NTAyNzgtMGE4OS00NTc5LWI2MzUtZDAyZTVkMGFkNzkwIiwicm9sZSI6IiJ9.G_GtDuBRxV-3aXJFYkyZV-A9aJ473jEGYZa2uWAGgYw"
-BASE_URL = "https://opendata.aemet.es/opendata/api"
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR  = os.path.join(ROOT_DIR, "data", "01_fetch")
-os.makedirs(OUT_DIR, exist_ok=True)
+ensure_core_dirs()
+OUT_DIR = FETCH_DIR
 
 # ── Fetcher ───────────────────────────────────────────────────────────────────
 
@@ -37,8 +35,8 @@ def FetchAemetImage(endpoint_path: str, retries: int = 3) -> bytes | None:
     Step 1: metadata request -> get 'datos' URL.
     Step 2: download image bytes from 'datos' URL.
     """
-    url     = f"{BASE_URL}{endpoint_path}"
-    headers = {"accept": "application/json", "api_key": API_KEY}
+    url     = f"{AEMET_BASE_URL}{endpoint_path}"
+    headers = {"accept": "application/json", "api_key": AEMET_API_KEY}
 
     for attempt in range(1, retries + 1):
         print(f"  Contacting AEMET API (attempt {attempt}/{retries})...")
@@ -85,6 +83,8 @@ def FetchAemetImage(endpoint_path: str, retries: int = 3) -> bytes | None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_logging("01_fetch_aemet")
+
     parser = argparse.ArgumentParser(description="Fetch AEMET radar image")
     parser.add_argument(
         "--radar", type=str, default="nacional",

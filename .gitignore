@@ -12,6 +12,7 @@ venv/
 # Plots & models output
 data/plots/
 data/models/
+logs/
 
 # OS
 .DS_Store

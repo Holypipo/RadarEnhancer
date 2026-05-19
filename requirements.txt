@@ -22,5 +22,16 @@ matplotlib>=3.7
 # HTTP (step 1 - AEMET API fetch)
 requests>=2.31
 
+# Interactive app / reports
+streamlit>=1.33
+plotly>=5.20
+
+# NEXRAD AWS fetch helper
+boto3>=1.34
+botocore>=1.34
+
 # Image quality / denoising (optional but improves step 3)
 scikit-image>=0.21
+
+# Optional binary radar reader for NEXRAD / ODIM / CF-Radial:
+# arm-pyart>=1.17
