@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+from pathlib import Path
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -34,6 +35,14 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import DATA_DIR, ENHANCE_DIR, FETCH_DIR, ensure_core_dirs, get_resnet_model_path
 from utils.logging_utils import configure_logging
+from utils.metrics import (
+    compute_dbz_metrics,
+    compute_difference_metrics,
+    format_dbz_metrics_block,
+    format_difference_block,
+    write_metrics_json,
+    write_summary_text,
+)
 from utils.radar_io import read_radar, get_field_array
 from utils.image_radar import AemetRadar
 from utils.enhancement import (
@@ -55,7 +64,8 @@ args = parser.parse_args()
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCALE      = 2
 ensure_core_dirs()
-OUT_DIR    = ENHANCE_DIR
+OUT_DIR    = Path(os.getenv("RADAR_STEP_OUT_DIR", str(ENHANCE_DIR)))
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = get_resnet_model_path()
 
 
@@ -235,11 +245,10 @@ def main():
         print(f"[!] No ResNet model -- using bicubic upscaling")
         print(f"    Tip: run 04_superresolution.py first")
 
+    raw_metrics = compute_dbz_metrics(raw)
+    raw_snr = compute_snr(raw)
     print(f"\n--- AEMET Radar Enhancement ---")
-    print(f"Raw shape      : {raw.shape}")
-    print(f"Signal pixels  : {int(np.sum(np.isfinite(raw) & (raw > 0))):,}")
-    print(f"Value range    : {np.nanmin(raw):.1f} ... {np.nanmax(raw):.1f} dBZ")
-    print(f"SNR (raw)      : {compute_snr(raw):.1f} dB")
+    print(format_dbz_metrics_block("Raw", raw_metrics, snr=raw_snr))
     print(f"ResNet SR      : {resnet_available}\n")
 
     print("Step 1 -- Palette smoother...")
@@ -253,8 +262,25 @@ def main():
 
     naive_up = upscale(raw, scale=SCALE, method="linear")
 
-    print(f"\nEnhanced shape : {enhanced.shape}")
-    print(f"SNR (enhanced) : {compute_snr(enhanced):.1f} dB\n")
+    enhanced_metrics = compute_dbz_metrics(enhanced)
+    enhanced_snr = compute_snr(enhanced)
+    diff_metrics = compute_difference_metrics(naive_up, enhanced)
+    summary = "\n".join(
+        [
+            format_dbz_metrics_block("Raw", raw_metrics, snr=raw_snr),
+            f"ResNet SR      : {resnet_available}",
+            "",
+            format_dbz_metrics_block("Enhanced", enhanced_metrics, snr=enhanced_snr),
+            "",
+            format_difference_block("Difference vs naive upscale", diff_metrics),
+        ]
+    )
+
+    print()
+    print(format_dbz_metrics_block("Enhanced", enhanced_metrics, snr=enhanced_snr))
+    print()
+    print(format_difference_block("Difference vs naive upscale", diff_metrics))
+    print()
 
     print("Generating plots...")
 
@@ -269,6 +295,23 @@ def main():
 
     PlotEnhancedPpi(enhanced, label, used_resnet=resnet_available,
         save_path=make_save_path(OUT_DIR, "03", "EnhancedPpi"))
+
+    metrics_payload = {
+        "source_file": label,
+        "resnet_used": bool(resnet_available),
+        "scale": SCALE,
+        "raw_metrics": raw_metrics,
+        "enhanced_metrics": enhanced_metrics,
+        "difference_metrics": diff_metrics,
+        "snr_raw": raw_snr,
+        "snr_enhanced": enhanced_snr,
+    }
+    metrics_path = os.getenv("RADAR_STEP_METRICS_JSON")
+    summary_path = os.getenv("RADAR_STEP_SUMMARY_TXT")
+    if metrics_path:
+        write_metrics_json(metrics_path, metrics_payload)
+    if summary_path:
+        write_summary_text(summary_path, summary)
 
     print(f"\n[OK] All plots saved to: {OUT_DIR}")
     if not resnet_available:

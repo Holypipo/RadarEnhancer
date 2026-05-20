@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+from pathlib import Path
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -25,6 +26,14 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import DATA_DIR, FETCH_DIR, VISUALIZE_DIR, ensure_core_dirs
 from utils.logging_utils import configure_logging
+from utils.metrics import (
+    compare_metrics,
+    compute_dbz_metrics,
+    format_dbz_metrics_block,
+    read_metrics_json,
+    write_metrics_json,
+    write_summary_text,
+)
 from utils.radar_io import read_radar, get_field_array
 from utils.enhancement import generate_synthetic_radar_field
 from utils.plot_utils import (
@@ -41,7 +50,8 @@ args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ensure_core_dirs()
-OUT_DIR = VISUALIZE_DIR
+OUT_DIR = Path(os.getenv("RADAR_STEP_OUT_DIR", str(VISUALIZE_DIR)))
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Plot functions ────────────────────────────────────────────────────────────
@@ -114,9 +124,33 @@ def main():
         data  = generate_synthetic_radar_field(h=760, w=760)
         label = "Synthetic"
 
-    signal = int(np.sum(np.isfinite(data) & (data > 0)))
-    print(f"Value range   : {np.nanmin(data):.1f} ... {np.nanmax(data):.1f} dBZ")
-    print(f"Signal pixels : {signal:,}")
+    metrics = compute_dbz_metrics(data)
+    metrics["source_file"] = label
+    summary_parts = [format_dbz_metrics_block("\n--- AEMET Visualize Decode ---", metrics)]
+
+    compare_path = os.getenv("RADAR_COMPARE_METRICS_JSON")
+    if compare_path and os.path.exists(compare_path):
+        fetch_metrics = read_metrics_json(compare_path)
+        comparison = compare_metrics(fetch_metrics, metrics)
+        comparison_lines = [
+            "\n--- Compare To Fetch ---",
+            f"Same shape     : {comparison['same_shape']}",
+            f"Exact match    : {comparison['exact_match']}",
+            f"Delta signal   : {comparison['delta_signal_pixels']:+,}",
+            f"Delta finite   : {comparison['delta_finite_pixels']:+,}",
+        ]
+        if comparison["delta_class_counts_dbz"]:
+            class_delta = ", ".join(
+                f"{key}:{value:+,}" for key, value in comparison["delta_class_counts_dbz"].items()
+            )
+            comparison_lines.append(f"Delta classes  : {class_delta}")
+        else:
+            comparison_lines.append("Delta classes  : none")
+        summary_parts.append("\n".join(comparison_lines))
+        metrics["comparison_to_fetch"] = comparison
+
+    summary = "\n".join(summary_parts)
+    print(summary)
 
     print("\nGenerating plots...")
 
@@ -127,6 +161,13 @@ def main():
     PlotRawArray(data,
         title=f"Raw dBZ Array -- {label}  ({data.shape[0]}x{data.shape[1]})",
         save_path=make_save_path(OUT_DIR, "02", "RawArray"))
+
+    metrics_path = os.getenv("RADAR_STEP_METRICS_JSON")
+    summary_path = os.getenv("RADAR_STEP_SUMMARY_TXT")
+    if metrics_path:
+        write_metrics_json(metrics_path, metrics)
+    if summary_path:
+        write_summary_text(summary_path, summary)
 
     print(f"\n[OK] Plots saved to: {OUT_DIR}")
     print("Next step: python 03_enhance.py")

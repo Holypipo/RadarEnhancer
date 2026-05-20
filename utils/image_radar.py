@@ -57,8 +57,8 @@ def image_to_dbz(image_path: str) -> np.ndarray:
     Signal pixels  → dBZ (12–72).
     Background / unmatched → np.nan.
     """
-    img  = Image.open(image_path).convert("RGB")
-    data = np.array(img, dtype=np.int32)
+    with Image.open(image_path) as img:
+        data = np.array(img.convert("RGB"), dtype=np.int32)
 
     H, W = data.shape[:2]
     dbz  = np.full((H, W), np.nan, dtype=np.float32)
@@ -95,7 +95,8 @@ class AemetRadar:
     def __init__(self, filepath: str):
         self.filepath   = filepath
         self.source     = "aemet"
-        self.pil_image  = Image.open(filepath).convert("RGB")   # original for display
+        with Image.open(filepath) as img:
+            self.pil_image = img.convert("RGB")   # original for display
         dbz_field       = image_to_dbz(filepath)
         self.fields     = {"reflectivity": {"data": dbz_field}}
         self.metadata   = {"instrument_name": "AEMET Image Radar"}

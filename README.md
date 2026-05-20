@@ -1,6 +1,6 @@
 # AEMET Radar Enhancement Pipeline
 
-4-step pipeline to fetch, visualise, enhance, and super-resolve AEMET radar data.
+Unified pipeline to fetch, visualise, enhance, and optionally train super-resolution for AEMET radar data.
 
 ## Setup
 
@@ -14,6 +14,21 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
+## Quick start
+
+```bash
+py radar.py run --radar nacional
+```
+
+That fetches the latest GIF for the selected radar and enhances that exact file.
+
+Optional:
+
+```bash
+py radar.py run --radar ba --visualize
+py radar.py train --epochs 30 --patches 1000
+```
+
 ## File structure
 
 ```
@@ -22,6 +37,7 @@ RadarEnhancer/
   02_visualize.py
   03_enhance.py
   04_superresolution.py
+  radar.py
   requirements.txt
   utils/
     __init__.py
@@ -49,7 +65,21 @@ Examples:
 
 Each run creates new timestamped files — old outputs are never overwritten.
 
-## Pipeline
+## Main CLI
+
+The preferred entrypoint is `radar.py`:
+
+```bash
+py radar.py fetch --radar nacional
+py radar.py visualize --radar ba
+py radar.py enhance --radar se
+py radar.py train --epochs 20 --patches 500
+py radar.py run --radar nacional --visualize
+```
+
+If `--radar` is omitted, the default radar is `nacional` unless `AEMET_DEFAULT_RADAR` is set.
+
+## Legacy scripts
 
 ### Step 1 — Fetch radar image
 ```bash

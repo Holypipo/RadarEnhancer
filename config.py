@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data"
 LOG_DIR = ROOT_DIR / "logs"
+RUNS_DIR = DATA_DIR / "runs"
 
 FETCH_DIR = DATA_DIR / "01_fetch"
 VISUALIZE_DIR = DATA_DIR / "02_visualize"
@@ -25,6 +26,7 @@ RESNET_MODEL_PATH = RESNET_DIR / "resnet_radar.pth"
 LEGACY_RESNET_MODEL_PATH = LEGACY_MODEL_DIR / "resnet_radar.pth"
 
 AEMET_BASE_URL = "https://opendata.aemet.es/opendata/api"
+AEMET_DEFAULT_RADAR = os.getenv("AEMET_DEFAULT_RADAR", "nacional").strip().lower()
 AEMET_API_KEY = os.getenv(
     "AEMET_API_KEY",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiZXJuYXQubW9udGFuYUBnbWFpbC5jb20iLCJqdGkiOiIwMjQ1MDI3OC0wYTg5LTQ1NzktYjYzNS1kMDJlNWQwYWQ3OTAiLCJpc3MiOiJBRU1FVCIsImlhdCI6MTc3MzgzMTM5NiwidXNlcklkIjoiMDI0NTAyNzgtMGE4OS00NTc5LWI2MzUtZDAyZTVkMGFkNzkwIiwicm9sZSI6IiJ9.G_GtDuBRxV-3aXJFYkyZV-A9aJ473jEGYZa2uWAGgYw",
@@ -36,6 +38,7 @@ def ensure_core_dirs() -> None:
     for path in (
         DATA_DIR,
         LOG_DIR,
+        RUNS_DIR,
         FETCH_DIR,
         VISUALIZE_DIR,
         ENHANCE_DIR,

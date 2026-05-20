@@ -19,13 +19,17 @@ import time
 import requests
 import argparse
 from datetime import datetime
+from pathlib import Path
 from config import AEMET_API_KEY, AEMET_BASE_URL, FETCH_DIR, ensure_core_dirs
 from utils.logging_utils import configure_logging
+from utils.metrics import compute_dbz_metrics, format_dbz_metrics_block, write_metrics_json, write_summary_text
+from utils.radar_io import read_radar, get_field_array
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 ensure_core_dirs()
-OUT_DIR = FETCH_DIR
+OUT_DIR = Path(os.getenv("RADAR_STEP_OUT_DIR", str(FETCH_DIR)))
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Fetcher ───────────────────────────────────────────────────────────────────
 
@@ -112,7 +116,23 @@ def main():
         with open(out_path, "wb") as f:
             f.write(content)
         size_kb = len(content) // 1024
+        radar = read_radar(out_path)
+        data = get_field_array(radar, "reflectivity")
+        metrics = compute_dbz_metrics(data)
+        metrics["source_file"] = filename
+        metrics["radar_scope"] = args.radar
+        metrics["download_size_kb"] = size_kb
+        summary = format_dbz_metrics_block("\n--- AEMET Fetch Decode ---", metrics)
         print(f"\n[OK] Saved -> {out_path}  ({size_kb} KB)")
+        print(summary)
+
+        metrics_path = os.getenv("RADAR_STEP_METRICS_JSON")
+        summary_path = os.getenv("RADAR_STEP_SUMMARY_TXT")
+        if metrics_path:
+            write_metrics_json(metrics_path, metrics)
+        if summary_path:
+            write_summary_text(summary_path, summary)
+
         print(f"Next step: python 02_visualize.py -f {filename}")
     else:
         print("\n[ERROR] Failed to fetch radar image after all retries.")
